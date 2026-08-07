@@ -45,10 +45,11 @@ type providerConsoleConfigDTO struct {
 }
 
 type mediaConfigDTO struct {
-	MaxImageBytes           int64  `json:"maxImageBytes"`
-	MaxTotalBytes           int64  `json:"maxTotalBytes"`
-	CleanupThresholdPercent int    `json:"cleanupThresholdPercent"`
-	CleanupInterval         string `json:"cleanupInterval"`
+	MaxImageBytes                 int64  `json:"maxImageBytes"`
+	MaxTotalBytes                 int64  `json:"maxTotalBytes"`
+	CleanupThresholdPercent       int    `json:"cleanupThresholdPercent"`
+	CleanupInterval               string `json:"cleanupInterval"`
+	AllowInsecureRemoteImageFetch bool   `json:"allowInsecureRemoteImageFetch"`
 }
 
 type frontendConfigDTO struct {
@@ -217,7 +218,9 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 		},
 		Media: settingsapp.MediaConfig{
 			MaxImageBytes: value.Media.MaxImageBytes, MaxTotalBytes: value.Media.MaxTotalBytes,
-			CleanupThresholdPercent: value.Media.CleanupThresholdPercent, CleanupInterval: value.Media.CleanupInterval,
+			CleanupThresholdPercent:       value.Media.CleanupThresholdPercent,
+			CleanupInterval:               value.Media.CleanupInterval,
+			AllowInsecureRemoteImageFetch: value.Media.AllowInsecureRemoteImageFetch,
 		},
 		Frontend: settingsapp.FrontendConfig{
 			PublicAPIBaseURL: value.Frontend.PublicAPIBaseURL,
@@ -299,7 +302,9 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 			},
 			Media: mediaConfigDTO{
 				MaxImageBytes: config.Media.MaxImageBytes, MaxTotalBytes: config.Media.MaxTotalBytes,
-				CleanupThresholdPercent: config.Media.CleanupThresholdPercent, CleanupInterval: config.Media.CleanupInterval,
+				CleanupThresholdPercent:       config.Media.CleanupThresholdPercent,
+				CleanupInterval:               config.Media.CleanupInterval,
+				AllowInsecureRemoteImageFetch: config.Media.AllowInsecureRemoteImageFetch,
 			},
 			Frontend: frontendConfigDTO{
 				PublicAPIBaseURL: config.Frontend.PublicAPIBaseURL,

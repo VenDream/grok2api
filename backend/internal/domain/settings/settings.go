@@ -49,10 +49,11 @@ type ProviderConsoleConfig struct {
 }
 
 type MediaConfig struct {
-	MaxImageBytes           int64
-	MaxTotalBytes           int64
-	CleanupThresholdPercent int
-	CleanupInterval         time.Duration
+	MaxImageBytes                 int64
+	MaxTotalBytes                 int64
+	CleanupThresholdPercent       int
+	CleanupInterval               time.Duration
+	AllowInsecureRemoteImageFetch bool
 }
 
 type ProviderWebConfig struct {

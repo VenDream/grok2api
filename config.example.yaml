@@ -84,6 +84,9 @@ deployment:
 media:
   # [通常不要修改] 当前仅支持 local；容量和清理策略在管理端设置。
   driver: local
+  # [按需修改] 为 true 时放宽远程图片导入的 SSRF 公网校验，并允许使用系统代理（Fake-IP 环境）。
+  # 默认 false；仅建议在受信私有部署中开启。也可在管理端「媒体存储」热更新。
+  allowInsecureRemoteImageFetch: false
   local:
     # [按需修改] 图片二进制目录；数据库只保存资源元数据。
     path: "./data/media"

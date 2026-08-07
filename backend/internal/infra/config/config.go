@@ -200,12 +200,15 @@ type BatchConfig struct {
 }
 
 type MediaConfig struct {
-	Driver                  string           `yaml:"driver"`
-	MaxImageBytes           int64            `yaml:"-"`
-	MaxTotalBytes           int64            `yaml:"-"`
-	CleanupThresholdPercent int              `yaml:"-"`
-	CleanupInterval         Duration         `yaml:"-"`
-	Local                   LocalMediaConfig `yaml:"local"`
+	Driver string `yaml:"driver"`
+	// AllowInsecureRemoteImageFetch 为 true 时放宽远程图片导入的 SSRF 公网校验，
+	// 并允许走系统代理（便于 Fake-IP 环境）。默认 false，仅建议在受信环境开启。
+	AllowInsecureRemoteImageFetch bool             `yaml:"allowInsecureRemoteImageFetch"`
+	MaxImageBytes                 int64            `yaml:"-"`
+	MaxTotalBytes                 int64            `yaml:"-"`
+	CleanupThresholdPercent       int              `yaml:"-"`
+	CleanupInterval               Duration         `yaml:"-"`
+	Local                         LocalMediaConfig `yaml:"local"`
 }
 
 type LocalMediaConfig struct {
@@ -897,7 +900,8 @@ func defaultConfig() Config {
 			RefreshConcurrency: 25, RandomDelay: Duration(500 * time.Millisecond),
 		},
 		Media: MediaConfig{
-			Driver: "local", MaxImageBytes: 32 << 20, MaxTotalBytes: 1 << 30,
+			Driver: "local", AllowInsecureRemoteImageFetch: false,
+			MaxImageBytes: 32 << 20, MaxTotalBytes: 1 << 30,
 			CleanupThresholdPercent: 80, CleanupInterval: Duration(10 * time.Minute),
 			Local: LocalMediaConfig{Path: "./data/media"},
 		},

@@ -50,16 +50,18 @@ type Service struct {
 	cleanupEvery  time.Duration
 	cleanupSignal chan struct{}
 	configChanged chan struct{}
-	totalBytes    atomic.Int64
-	inputSaveMu   sync.Mutex
+	totalBytes                    atomic.Int64
+	inputSaveMu                   sync.Mutex
+	allowInsecureRemoteImageFetch bool
 }
 
 type Config struct {
-	PublicBaseURL           string
-	MaxImageBytes           int64
-	MaxTotalBytes           int64
-	CleanupThresholdPercent int
-	CleanupInterval         time.Duration
+	PublicBaseURL                 string
+	MaxImageBytes                 int64
+	MaxTotalBytes                 int64
+	CleanupThresholdPercent       int
+	CleanupInterval               time.Duration
+	AllowInsecureRemoteImageFetch bool
 }
 
 type ImageStats struct {
@@ -85,6 +87,7 @@ func NewServiceWithTickets(assets repository.MediaAssetRepository, jobs reposito
 		assets: assets, jobs: jobs, tickets: tickets, objects: objects, cleanupLock: cleanupLock,
 		publicBaseURL: strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/"), maxImageBytes: cfg.MaxImageBytes,
 		maxTotalBytes: cfg.MaxTotalBytes, cleanupAt: cfg.CleanupThresholdPercent, cleanupEvery: cfg.CleanupInterval,
+		allowInsecureRemoteImageFetch: cfg.AllowInsecureRemoteImageFetch,
 		cleanupSignal: make(chan struct{}, 1), configChanged: make(chan struct{}, 1),
 	}
 }
@@ -97,11 +100,22 @@ func (s *Service) UpdateConfig(cfg Config) {
 	s.maxTotalBytes = cfg.MaxTotalBytes
 	s.cleanupAt = cfg.CleanupThresholdPercent
 	s.cleanupEvery = cfg.CleanupInterval
+	s.allowInsecureRemoteImageFetch = cfg.AllowInsecureRemoteImageFetch
 	s.configMu.Unlock()
 	select {
 	case s.configChanged <- struct{}{}:
 	default:
 	}
+}
+
+// AllowInsecureRemoteImageFetch 报告远程图片导入是否放宽 SSRF 公网校验。
+func (s *Service) AllowInsecureRemoteImageFetch() bool {
+	if s == nil {
+		return false
+	}
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.allowInsecureRemoteImageFetch
 }
 
 // SaveImage 校验并保存一份不可变图片，文件写入失败或元数据落库失败时不会留下半成品。
@@ -627,6 +641,7 @@ func (s *Service) runtimeConfig() Config {
 		PublicBaseURL: s.publicBaseURL,
 		MaxImageBytes: s.maxImageBytes, MaxTotalBytes: s.maxTotalBytes,
 		CleanupThresholdPercent: s.cleanupAt, CleanupInterval: s.cleanupEvery,
+		AllowInsecureRemoteImageFetch: s.allowInsecureRemoteImageFetch,
 	}
 }
 

@@ -186,8 +186,7 @@ func TestVideoPlaybackURLPrefersPublicAssetRoute(t *testing.T) {
 	}
 	response := videoGenerationResponse(job, handler.videoPlaybackURL(job))
 	video, ok := response["video"].(gin.H)
-	if !ok || video["url"] != "https://api.example.com/grok2api/v1/media/videos/vid_abc123" {
-		t.Fatalf("response = %#v", response)
+	if !ok || video["url"] != "https://api.example.com/grok2api/v1/media/videos/vid_abc123" {		t.Fatalf("response = %#v", response)
 	}
 }
 
@@ -200,7 +199,6 @@ func TestVideoPlaybackURLFallsBackToContentEndpoint(t *testing.T) {
 		t.Fatalf("fallback URL = %q", got)
 	}
 }
-
 func TestVideoContentURLFollowsRuntimePublicAPIBase(t *testing.T) {
 	baseURL := "https://old.example.com"
 	handler := NewHandler(nil, nil, 1<<20, "https://static.example.com").SetPublicAPIBaseURLResolver(func() string {

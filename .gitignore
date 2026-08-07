@@ -50,3 +50,18 @@ __pycache__/
 /.tmp/
 /tmp/
 /Dockerfile.local
+.gitattributes
+
+# AI agents
+.agent
+.agents
+.trellis
+.grok
+.codex
+.claude
+.opencode
+grok.sh
+codex.sh
+claude.sh
+opencode.sh
+AGENTS.md

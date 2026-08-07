@@ -22,6 +22,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
+	"github.com/chenyme/grok2api/backend/internal/pkg/imagefit"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
 )
 
@@ -511,7 +512,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	if operation == "" {
 		operation = decodeVideoOperation(job.InputJSON)
 	}
-	imageURL, referenceURLs, referenceAudios, videoURL, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON)
+	imageURL, referenceURLs, referenceAudios, videoURL, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON, job.Size)
 	if err != nil {
 		s.failVideoJob(parent, job, "input_unavailable", err, 0, nil)
 		return
@@ -817,38 +818,32 @@ func (s *Service) validateVideoInputReferences(ctx context.Context, references [
 	return nil
 }
 
-func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string) (string, []string, error) {
+func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string, aspectRatio string) (string, []string, error) {
 	imageURL, referenceURLs := decodeVideoInputParts(inputJSON)
-	all := videoInputReferences(imageURL, referenceURLs)
-	resolved, err := s.resolveVideoInputReferences(ctx, all, "image")
-	if err != nil {
-		return "", nil, err
-	}
-	// Map resolved URLs back while preserving empty/non-empty slots by original order.
-	next := 0
-	take := func(original string) string {
-		original = strings.TrimSpace(original)
-		if original == "" {
-			return ""
+	// First-frame I2V path: letterbox local staged images to the target aspect.
+	// Reference images (R2V) keep their native ratio so identity cues are not padded away.
+	var outImage string
+	if strings.TrimSpace(imageURL) != "" {
+		resolved, err := s.resolveVideoInputReferences(ctx, []string{imageURL}, "image", aspectRatio)
+		if err != nil {
+			return "", nil, err
 		}
-		if next >= len(resolved) {
-			return original
+		if len(resolved) > 0 {
+			outImage = resolved[0]
 		}
-		value := resolved[next]
-		next++
-		return value
 	}
-	outImage := take(imageURL)
 	outRefs := make([]string, 0, len(referenceURLs))
-	for _, raw := range referenceURLs {
-		if value := take(raw); value != "" {
-			outRefs = append(outRefs, value)
+	if len(referenceURLs) > 0 {
+		resolved, err := s.resolveVideoInputReferences(ctx, referenceURLs, "image", "")
+		if err != nil {
+			return "", nil, err
 		}
+		outRefs = append(outRefs, resolved...)
 	}
 	return outImage, outRefs, nil
 }
 
-func (s *Service) resolveVideoInputReferences(ctx context.Context, references []string, expectedKind string) ([]string, error) {
+func (s *Service) resolveVideoInputReferences(ctx context.Context, references []string, expectedKind string, aspectRatio string) ([]string, error) {
 	resolved := make([]string, 0, len(references))
 	estimatedBytes := videoInputJSONBaseBytes
 	for _, reference := range references {
@@ -882,10 +877,24 @@ func (s *Service) resolveVideoInputReferences(ctx context.Context, references []
 		if len(data) == 0 || len(data) > media.MaxInputJSONBytes {
 			return nil, ErrVideoInputTooLarge
 		}
-		if !addVideoReferenceBytes(&estimatedBytes, materializedVideoReferenceBytes(asset.MIMEType, int64(len(data)))) {
+		// Upstream I2V models stretch the first frame into the target aspect
+		// ratio. Letterbox/pillarbox first so portrait sources into landscape
+		// (and vice versa) keep correct proportions with black bars.
+		mimeType := asset.MIMEType
+		if expectedKind == "image" && strings.TrimSpace(aspectRatio) != "" {
+			if fitted, fittedMIME, changed, fitErr := imagefit.LetterboxToAspectRatio(data, mimeType, aspectRatio); fitErr != nil {
+				return nil, fmt.Errorf("适配视频首图画幅: %w", fitErr)
+			} else if changed {
+				data, mimeType = fitted, fittedMIME
+			}
+			if len(data) == 0 || len(data) > media.MaxInputJSONBytes {
+				return nil, ErrVideoInputTooLarge
+			}
+		}
+		if !addVideoReferenceBytes(&estimatedBytes, materializedVideoReferenceBytes(mimeType, int64(len(data)))) {
 			return nil, ErrVideoInputTooLarge
 		}
-		resolved = append(resolved, "data:"+asset.MIMEType+";base64,"+base64.StdEncoding.EncodeToString(data))
+		resolved = append(resolved, "data:"+mimeType+";base64,"+base64.StdEncoding.EncodeToString(data))
 	}
 	return resolved, nil
 }
@@ -1141,9 +1150,9 @@ func decodeVideoOperation(value string) provider.VideoOperation {
 	}
 }
 
-func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.VideoOperation, inputJSON string) (string, []string, []string, string, error) {
+func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.VideoOperation, inputJSON string, aspectRatio string) (string, []string, []string, string, error) {
 	_, _, referenceAudios, videoURL := decodeVideoInputDetailed(inputJSON)
-	resolvedImage, resolvedRefs, err := s.resolveVideoInputParts(ctx, inputJSON)
+	resolvedImage, resolvedRefs, err := s.resolveVideoInputParts(ctx, inputJSON, aspectRatio)
 	if err != nil {
 		return "", nil, nil, "", err
 	}
@@ -1153,7 +1162,7 @@ func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.
 	if operation == provider.VideoOperationGenerate {
 		return "", nil, nil, "", ErrVideoInputUnavailable
 	}
-	resolvedVideos, err := s.resolveVideoInputReferences(ctx, []string{videoURL}, "video")
+	resolvedVideos, err := s.resolveVideoInputReferences(ctx, []string{videoURL}, "video", "")
 	if err != nil {
 		return "", nil, nil, "", err
 	}

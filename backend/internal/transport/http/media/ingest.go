@@ -93,13 +93,18 @@ func isValidRedirectURL(parsed *url.URL) bool {
 
 // resolveImportTarget 先解析并校验全部 DNS 结果，再固定本次请求的连接 IP。
 // 这同时消除了校验与拨号之间的 DNS rebinding 窗口；ssrfSafeControl 仍在拨号时做第二道校验。
-func resolveImportTarget(ctx context.Context, parsed *url.URL, resolver importURLResolver) (*importTarget, error) {
+// allowInsecure 为 true 时跳过公网 IP 校验（仍要求合法 http/https 主机名）。
+func resolveImportTarget(ctx context.Context, parsed *url.URL, resolver importURLResolver, allowInsecure bool) (*importTarget, error) {
 	if !isValidRedirectURL(parsed) {
 		return nil, errFetchBlocked
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") ||
-		strings.HasSuffix(host, ".internal") || strings.Contains(host, "%") {
+	if !allowInsecure {
+		if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") ||
+			strings.HasSuffix(host, ".internal") || strings.Contains(host, "%") {
+			return nil, errFetchBlocked
+		}
+	} else if strings.Contains(host, "%") {
 		return nil, errFetchBlocked
 	}
 
@@ -121,9 +126,11 @@ func resolveImportTarget(ctx context.Context, parsed *url.URL, resolver importUR
 			addresses = append(addresses, address.Unmap())
 		}
 	}
-	for _, address := range addresses {
-		if !isPublicIP(address) {
-			return nil, fmt.Errorf("图片主机解析到非公网地址 %s: %w", address, errFetchBlocked)
+	if !allowInsecure {
+		for _, address := range addresses {
+			if !isPublicIP(address) {
+				return nil, fmt.Errorf("图片主机解析到非公网地址 %s: %w", address, errFetchBlocked)
+			}
 		}
 	}
 
@@ -142,14 +149,18 @@ func resolveImportTarget(ctx context.Context, parsed *url.URL, resolver importUR
 	return &importTarget{fetchURL: &fetchURL, hostHeader: parsed.Host, serverName: host}, nil
 }
 
-func newIngestHTTPClient(target *importTarget) (*http.Client, *http.Transport) {
+func newIngestHTTPClient(target *importTarget, allowInsecure bool) (*http.Client, *http.Transport) {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 10 * time.Second,
+	}
+	if !allowInsecure {
+		dialer.Control = ssrfSafeControl
+	}
 	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 10 * time.Second,
-			Control:   ssrfSafeControl,
-		}).DialContext,
+		// 默认禁用代理以防 SSRF 绕过；放宽模式跟随系统代理（Fake-IP 环境常用）。
+		Proxy:                  nil,
+		DialContext:            dialer.DialContext,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12, ServerName: target.serverName},
 		TLSHandshakeTimeout:    10 * time.Second,
 		ResponseHeaderTimeout:  15 * time.Second,
@@ -159,6 +170,9 @@ func newIngestHTTPClient(target *importTarget) (*http.Client, *http.Transport) {
 		MaxConnsPerHost:        1,
 		IdleConnTimeout:        30 * time.Second,
 		ForceAttemptHTTP2:      true,
+	}
+	if allowInsecure {
+		transport.Proxy = http.ProxyFromEnvironment
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -178,8 +192,8 @@ func isImportRedirect(status int) bool {
 }
 
 // fetchRemoteImage 抓取远端图片字节，读取上限 ingestMaxImageBytes，超限返回 errImageTooLarge。
-// 目标地址被 SSRF 防护拒绝时返回 errFetchBlocked。
-func fetchRemoteImage(ctx context.Context, rawURL string) ([]byte, error) {
+// 目标地址被 SSRF 防护拒绝时返回 errFetchBlocked。allowInsecure 放宽公网校验并启用系统代理。
+func fetchRemoteImage(ctx context.Context, rawURL string, allowInsecure bool) ([]byte, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || !isValidRedirectURL(parsed) {
 		return nil, errFetchBlocked
@@ -188,7 +202,7 @@ func fetchRemoteImage(ctx context.Context, rawURL string) ([]byte, error) {
 	defer cancel()
 
 	for redirects := 0; ; redirects++ {
-		target, err := resolveImportTarget(fetchCtx, parsed, net.DefaultResolver)
+		target, err := resolveImportTarget(fetchCtx, parsed, net.DefaultResolver, allowInsecure)
 		if err != nil {
 			return nil, err
 		}
@@ -200,7 +214,7 @@ func fetchRemoteImage(ctx context.Context, rawURL string) ([]byte, error) {
 		req.Header.Set("Accept", "image/*")
 		req.Header.Set("User-Agent", "grok2api-media-importer/1.0")
 
-		client, transport := newIngestHTTPClient(target)
+		client, transport := newIngestHTTPClient(target, allowInsecure)
 		resp, err := client.Do(req)
 		if err != nil {
 			transport.CloseIdleConnections()
@@ -276,7 +290,8 @@ func (h *Handler) importInputImageFromURL(c *gin.Context) {
 		return
 	}
 
-	data, err := fetchRemoteImage(c.Request.Context(), rawURL)
+	allowInsecure := h.service != nil && h.service.AllowInsecureRemoteImageFetch()
+	data, err := fetchRemoteImage(c.Request.Context(), rawURL, allowInsecure)
 	if err != nil {
 		switch {
 		case errors.Is(err, errImageTooLarge):

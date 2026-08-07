@@ -81,10 +81,11 @@ type BatchConfig struct {
 }
 
 type MediaConfig struct {
-	MaxImageBytes           int64
-	MaxTotalBytes           int64
-	CleanupThresholdPercent int
-	CleanupInterval         string
+	MaxImageBytes                 int64
+	MaxTotalBytes                 int64
+	CleanupThresholdPercent       int
+	CleanupInterval               string
+	AllowInsecureRemoteImageFetch bool
 }
 
 // FrontendConfig 是管理接口使用的公开 API 地址输入。
@@ -374,6 +375,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	base.Media.MaxTotalBytes = value.Media.MaxTotalBytes
 	base.Media.CleanupThresholdPercent = value.Media.CleanupThresholdPercent
 	base.Media.CleanupInterval = config.Duration(value.Media.CleanupInterval)
+	base.Media.AllowInsecureRemoteImageFetch = value.Media.AllowInsecureRemoteImageFetch
 	base.Frontend.PublicAPIBaseURLOverride = strings.TrimSpace(value.Frontend.PublicAPIBaseURL)
 	segmentedEnabled := base.Routing.SegmentedSelectorEnabled
 	segmentedMinCandidates := base.Routing.SegmentedMinCandidates
@@ -464,7 +466,9 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		},
 		Media: settingsdomain.MediaConfig{
 			MaxImageBytes: value.Media.MaxImageBytes, MaxTotalBytes: value.Media.MaxTotalBytes,
-			CleanupThresholdPercent: value.Media.CleanupThresholdPercent, CleanupInterval: value.Media.CleanupInterval.Value(),
+			CleanupThresholdPercent:       value.Media.CleanupThresholdPercent,
+			CleanupInterval:               value.Media.CleanupInterval.Value(),
+			AllowInsecureRemoteImageFetch: value.Media.AllowInsecureRemoteImageFetch,
 		},
 		Frontend: settingsdomain.FrontendConfig{
 			PublicAPIBaseURL: value.Frontend.PublicAPIBaseURLOverride,
@@ -554,6 +558,7 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	next.Media.MaxImageBytes = input.Media.MaxImageBytes
 	next.Media.MaxTotalBytes = input.Media.MaxTotalBytes
 	next.Media.CleanupThresholdPercent = input.Media.CleanupThresholdPercent
+	next.Media.AllowInsecureRemoteImageFetch = input.Media.AllowInsecureRemoteImageFetch
 	next.Frontend.PublicAPIBaseURLOverride = strings.TrimSpace(input.Frontend.PublicAPIBaseURL)
 	next.Routing.MaxAttempts = input.Routing.MaxAttempts
 	next.Routing.VideoMaxAttempts = input.Routing.VideoMaxAttempts
@@ -690,7 +695,9 @@ func toEditable(cfg config.Config) EditableConfig {
 		},
 		Media: MediaConfig{
 			MaxImageBytes: cfg.Media.MaxImageBytes, MaxTotalBytes: cfg.Media.MaxTotalBytes,
-			CleanupThresholdPercent: cfg.Media.CleanupThresholdPercent, CleanupInterval: cfg.Media.CleanupInterval.String(),
+			CleanupThresholdPercent:       cfg.Media.CleanupThresholdPercent,
+			CleanupInterval:               cfg.Media.CleanupInterval.String(),
+			AllowInsecureRemoteImageFetch: cfg.Media.AllowInsecureRemoteImageFetch,
 		},
 		Frontend: FrontendConfig{
 			PublicAPIBaseURL: cfg.Frontend.PublicAPIBaseURLOverride,

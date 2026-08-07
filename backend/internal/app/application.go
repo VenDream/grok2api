@@ -513,7 +513,9 @@ func mediaConfig(cfg config.Config) mediaapp.Config {
 	return mediaapp.Config{
 		PublicBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(),
 		MaxImageBytes: cfg.Media.MaxImageBytes, MaxTotalBytes: cfg.Media.MaxTotalBytes,
-		CleanupThresholdPercent: cfg.Media.CleanupThresholdPercent, CleanupInterval: cfg.Media.CleanupInterval.Value(),
+		CleanupThresholdPercent:       cfg.Media.CleanupThresholdPercent,
+		CleanupInterval:               cfg.Media.CleanupInterval.Value(),
+		AllowInsecureRemoteImageFetch: cfg.Media.AllowInsecureRemoteImageFetch,
 	}
 }
 

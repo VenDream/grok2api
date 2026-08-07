@@ -912,8 +912,7 @@ func (h *Handler) getVideo(c *gin.Context) {
 	c.JSON(http.StatusOK, videoGenerationResponse(job, h.videoPlaybackURL(job)))
 }
 
-func (h *Handler) publicURL(path string) string {
-	baseURL := h.publicAPIBaseURL
+func (h *Handler) publicURL(path string) string {	baseURL := h.publicAPIBaseURL
 	if h.publicBaseURL != nil {
 		baseURL = strings.TrimRight(strings.TrimSpace(h.publicBaseURL()), "/")
 	}

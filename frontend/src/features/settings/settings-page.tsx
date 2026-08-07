@@ -184,6 +184,13 @@ export function SettingsPage() {
               <SettingsField controlId="frontend-public-api-base-url" label={t("settings.media.publicApiBaseURL")} description={t("settings.media.publicApiBaseURLHelp")} error={form.formState.errors.frontend?.publicApiBaseURL?.message} className="sm:col-span-2">
                 <Input id="frontend-public-api-base-url" placeholder="https://api.example.com" {...form.register("frontend.publicApiBaseURL")} />
               </SettingsField>
+              <SettingsField controlId="media-allow-insecure-remote-image-fetch" label={t("settings.media.allowInsecureRemoteImageFetch")} description={t("settings.media.allowInsecureRemoteImageFetchHelp")} className="sm:col-span-2">
+                <Controller control={form.control} name="media.allowInsecureRemoteImageFetch" render={({ field }) => (
+                  <div className="flex h-8 items-center">
+                    <Switch id="media-allow-insecure-remote-image-fetch" checked={field.value} onCheckedChange={field.onChange} />
+                  </div>
+                )} />
+              </SettingsField>
             </div>
           </SettingsSection>
 

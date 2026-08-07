@@ -881,7 +881,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const references = useReferenceImages(8);
   const isEditMode = references.hasReferences;
   const supportsQuality = model.toLowerCase().endsWith("grok-imagine-image-2.0");
-  const imageAspectOptions = ["auto", ...imageAspectRatios.filter((item) => item !== "auto")];
+  const imageAspectOptions = ["auto", ...imageAspectRatios];
 
   const mutation = useMutation({
     mutationFn: async (request: {
@@ -1219,6 +1219,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
           {job ? (
             <VideoResult
               requestId={job.requestId}
+              apiKey={job.apiKey}
               status={statusQuery.data}
               loading={statusQuery.isPending || statusQuery.isFetching}
               error={statusQuery.isError ? statusQuery.error.message : ""}
@@ -1413,9 +1414,25 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   );
 }
 
-function VideoResult({ requestId, status, loading, error, onRetry }: { requestId: string; status?: VideoStatus; loading: boolean; error: string; onRetry: () => void }) {
-  const { t } = useTranslation();
+function VideoResult({
+  requestId,
+  apiKey,
+  status,
+  loading,
+  error,
+  onRetry,
+}: {
+  requestId: string;
+  apiKey: string;
+  status?: VideoStatus;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+}) {  const { t } = useTranslation();
   const progress = status?.progress ?? 0;
+  const sourceURL =
+    status?.status === "done" && status.video?.url ? status.video.url : "";
+  const playback = useAuthorizedVideoURL(sourceURL, apiKey);
   return (
     <div className="w-full space-y-4" aria-live="polite">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -1431,11 +1448,37 @@ function VideoResult({ requestId, status, loading, error, onRetry }: { requestId
       {status?.status === "failed" ? <InlineError message={status.error?.message || t("creativeConsole.errors.videoFailed")} /> : null}
       {status?.status === "done" && status.video ? (
         <div className="space-y-3">
-          <video src={status.video.url} controls preload="metadata" className="max-h-[60vh] w-full rounded-2xl bg-black shadow-sm" />
+          {playback.error ? (
+            <InlineError message={playback.error} />
+          ) : playback.url ? (
+            <video
+              src={playback.url}
+              controls
+              preload="metadata"
+              className="max-h-[60vh] w-full rounded-2xl bg-black shadow-sm"
+            />
+          ) : (
+            <div className="flex min-h-40 items-center justify-center gap-2 rounded-2xl bg-black/80 text-xs text-muted-foreground">
+              <Spinner />
+              {t("creativeConsole.loadingVideo")}
+            </div>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">{status.video.duration ? t("creativeConsole.videoDuration", { count: status.video.duration }) : ""}</span>
-            <Button variant="secondary" size="sm" asChild><a href={status.video.url} target="_blank" rel="noreferrer"><ExternalLink />{t("creativeConsole.openVideo")}</a></Button>
-          </div>
+            <span className="text-xs text-muted-foreground">
+              {status.video.duration
+                ? t("creativeConsole.videoDuration", {
+                    count: status.video.duration,
+                  })
+                : ""}
+            </span>
+            {playback.url ? (
+              <Button variant="secondary" size="sm" asChild>
+                <a href={playback.url} target="_blank" rel="noreferrer">
+                  <ExternalLink />
+                  {t("creativeConsole.openVideo")}
+                </a>
+              </Button>
+            ) : null}          </div>
         </div>
       ) : null}
     </div>
@@ -1584,6 +1627,90 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
       </form>
     </div>
   );
+}
+
+type VideoURLKind = "empty" | "direct" | "authorized-content";
+
+function classifyVideoURL(sourceURL: string): VideoURLKind {
+  if (!sourceURL) return "empty";
+  try {
+    const resolved = new URL(sourceURL, window.location.origin);
+    if (resolved.pathname.startsWith("/v1/media/videos/")) return "direct";
+    if (
+      resolved.origin === window.location.origin &&
+      resolved.pathname.includes("/v1/videos/") &&
+      resolved.pathname.endsWith("/content")
+    ) {
+      return "authorized-content";
+    }
+  } catch {
+    // Fall through and treat as a direct URL (e.g. absolute upstream links).
+  }
+  return "direct";
+}
+
+// /v1/videos/{id}/content 需要 Bearer；浏览器 <video src> / 新标签页带不上。
+// 公开的 /v1/media/videos/{assetId} 可直接播；content 路径则鉴权拉取为 blob。
+function useAuthorizedVideoURL(
+  sourceURL: string,
+  apiKey: string,
+): { url: string; error: string } {
+  const { t } = useTranslation();
+  const kind = classifyVideoURL(sourceURL);
+  const [authorized, setAuthorized] = useState<{
+    source: string;
+    url: string;
+    error: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (kind !== "authorized-content" || !sourceURL || !apiKey) return;
+
+    let cancelled = false;
+    let objectURL = "";
+    void (async () => {
+      try {
+        const response = await fetch(sourceURL, {
+          headers: { Authorization: `Bearer ${apiKey}`, Accept: "*/*" },
+        });
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(
+            text.trim() || response.statusText || `HTTP ${response.status}`,
+          );
+        }
+        const blob = await response.blob();
+        if (cancelled) return;
+        objectURL = URL.createObjectURL(blob);
+        setAuthorized({ source: sourceURL, url: objectURL, error: "" });
+      } catch (fetchError) {
+        if (cancelled) return;
+        setAuthorized({
+          source: sourceURL,
+          url: "",
+          error:
+            fetchError instanceof Error
+              ? fetchError.message
+              : t("creativeConsole.errors.videoFailed"),
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectURL) URL.revokeObjectURL(objectURL);
+    };
+  }, [apiKey, kind, sourceURL, t]);
+
+  if (kind === "empty") return { url: "", error: "" };
+  if (kind === "direct") return { url: sourceURL, error: "" };
+  if (kind === "authorized-content" && !apiKey) {
+    return { url: "", error: t("creativeConsole.errors.videoFailed") };
+  }
+  if (authorized?.source === sourceURL) {
+    return { url: authorized.url, error: authorized.error };
+  }
+  return { url: "", error: "" };
 }
 
 function WelcomeState({ title }: { title: string }) {

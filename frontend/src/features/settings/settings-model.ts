@@ -131,6 +131,7 @@ export const settingsSchema = z.object({
     maxTotalSize: byteSizeSchema.refine((value) => byteSizeBytes(value) <= 2 ** 40),
     cleanupThresholdPercent: z.number().int().min(50).max(95),
     cleanupInterval: durationSchema.refine((value) => durationSeconds(value) >= 60 && durationSeconds(value) <= 86_400),
+    allowInsecureRemoteImageFetch: z.boolean(),
   }).refine((value) => byteSizeBytes(value.maxTotalSize) >= byteSizeBytes(value.maxImageSize), { path: ["maxTotalSize"] }),
   frontend: z.object({
     publicApiBaseURL: z.string().trim().max(2048).refine((value) => validPublicAPIBaseURL(value), { message: "invalid" }),
@@ -197,6 +198,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
       maxImageSize: parseByteSize(config.media.maxImageBytes), maxTotalSize: parseByteSize(config.media.maxTotalBytes),
       cleanupThresholdPercent: config.media.cleanupThresholdPercent,
       cleanupInterval: parseDuration(config.media.cleanupInterval),
+      allowInsecureRemoteImageFetch: Boolean(config.media.allowInsecureRemoteImageFetch),
     },
     frontend: {
       publicApiBaseURL: config.frontend.publicApiBaseURL,
@@ -240,6 +242,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
       maxImageBytes: byteSizeBytes(config.media.maxImageSize), maxTotalBytes: byteSizeBytes(config.media.maxTotalSize),
       cleanupThresholdPercent: config.media.cleanupThresholdPercent,
       cleanupInterval: formatDuration(config.media.cleanupInterval),
+      allowInsecureRemoteImageFetch: config.media.allowInsecureRemoteImageFetch,
     },
     frontend: {
       publicApiBaseURL: config.frontend.publicApiBaseURL.trim(),

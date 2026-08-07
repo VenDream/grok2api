@@ -485,7 +485,7 @@ func TestResolveVideoInputFileReferenceToDataURI(t *testing.T) {
 	if err := service.validateVideoInputReferences(context.Background(), []string{reference}, "video"); !errors.Is(err, ErrVideoInputUnavailable) {
 		t.Fatalf("image accepted as video input: %v", err)
 	}
-	resolved, err := service.resolveVideoInputReferences(context.Background(), []string{"https://example.com/a.png", reference}, "image")
+	resolved, err := service.resolveVideoInputReferences(context.Background(), []string{"https://example.com/a.png", reference}, "image", "")
 	if err != nil {
 		t.Fatal(err)
 	}

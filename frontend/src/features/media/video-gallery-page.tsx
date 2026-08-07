@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, Clock, Eye, ListVideo, Loader2, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -262,52 +262,185 @@ export function VideoGalleryPage() {
 function VideoPreview({ assetId }: { assetId: string }) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const autoplayAttemptedRef = useRef(false);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  // Browsers often block unmuted autoplay; try with sound first, fall back to muted + unmute CTA.
+  const [blockedUnmuted, setBlockedUnmuted] = useState(false);
+  const src = videoAssetURL(assetId);
+
+  function markReady(): void {
+    setState((current) => (current === "error" ? current : "ready"));
+  }
+
+  function markError(): void {
+    setState("error");
+  }
+
+  async function enableSound(): Promise<void> {
+    const video = videoRef.current;
+    if (!video) return;
+    video.loop = true;
+    video.muted = false;
+    try {
+      await video.play();
+      setBlockedUnmuted(false);
+      markReady();
+    } catch {
+      setBlockedUnmuted(true);
+    }
+  }
+
+  // Prefer unmuted loop autoplay; fall back to muted if the browser blocks audio.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    autoplayAttemptedRef.current = false;
+    setBlockedUnmuted(false);
+
+    const syncFromElement = () => {
+      if (video.error) {
+        markError();
+        return;
+      }
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || !video.paused || video.currentTime > 0) {
+        markReady();
+      }
+    };
+
+    const tryAutoplay = () => {
+      if (autoplayAttemptedRef.current) return;
+      autoplayAttemptedRef.current = true;
+      void (async () => {
+        video.loop = true;
+        video.muted = false;
+        try {
+          await video.play();
+          setBlockedUnmuted(false);
+          markReady();
+          return;
+        } catch {
+          // Unmuted autoplay blocked by browser policy.
+        }
+        video.muted = true;
+        try {
+          await video.play();
+          setBlockedUnmuted(true);
+          markReady();
+        } catch {
+          // Native controls remain available.
+        }
+      })();
+    };
+
+    syncFromElement();
+    tryAutoplay();
+    video.addEventListener("loadedmetadata", tryAutoplay);
+    video.addEventListener("loadeddata", syncFromElement);
+    video.addEventListener("canplay", tryAutoplay);
+    video.addEventListener("canplaythrough", syncFromElement);
+    video.addEventListener("playing", syncFromElement);
+    video.addEventListener("timeupdate", syncFromElement);
+    video.addEventListener("error", markError);
+    return () => {
+      video.removeEventListener("loadedmetadata", tryAutoplay);
+      video.removeEventListener("loadeddata", syncFromElement);
+      video.removeEventListener("canplay", tryAutoplay);
+      video.removeEventListener("canplaythrough", syncFromElement);
+      video.removeEventListener("playing", syncFromElement);
+      video.removeEventListener("timeupdate", syncFromElement);
+      video.removeEventListener("error", markError);
+    };
+  }, [src]);
 
   function retry(): void {
     setState("loading");
-    videoRef.current?.load();
+    setBlockedUnmuted(false);
+    autoplayAttemptedRef.current = false;
+    const video = videoRef.current;
+    if (!video) return;
+    video.load();
+    autoplayAttemptedRef.current = false;
+    video.loop = true;
+    video.muted = false;
+    void video.play().then(() => {
+      setBlockedUnmuted(false);
+      markReady();
+    }).catch(() => {
+      video.muted = true;
+      void video.play().then(() => {
+        setBlockedUnmuted(true);
+        markReady();
+      }).catch(() => undefined);
+    });
   }
 
   return (
-    <div className="relative flex min-h-56 w-full items-center justify-center overflow-hidden rounded-lg bg-black sm:min-h-80">
-      <video
-        ref={videoRef}
-        className={cn("h-auto max-h-[70vh] w-auto max-w-full object-contain", state === "error" && "invisible")}
-        src={videoAssetURL(assetId)}
-        controls
-        playsInline
-        preload="auto"
-        onLoadStart={() => setState("loading")}
-        onLoadedMetadata={(event) => showFirstVideoFrame(event.currentTarget)}
-        onLoadedData={() => setState("ready")}
-        onCanPlay={() => setState("ready")}
-        onEnded={(event) => showFirstVideoFrame(event.currentTarget)}
-        onError={() => setState("error")}
-      />
-      {state === "loading" ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black">
-          <Spinner className="size-5 text-white" />
-          <span className="sr-only">{t("common.loading")}</span>
-        </div>
-      ) : null}
-      {state === "error" ? (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black px-6 text-center text-white">
-          <AlertCircle className="size-6 text-red-400" />
-          <p className="text-sm">{t("media.videos.previewUnavailable")}</p>
-          <Button type="button" variant="secondary" size="sm" onClick={retry}>
-            <RefreshCw />
-            {t("common.retry")}
-          </Button>
-        </div>
-      ) : null}
+    <div className="space-y-3">
+      <div className="relative flex min-h-56 w-full items-center justify-center overflow-hidden rounded-lg bg-black sm:min-h-80">
+        <video
+          ref={videoRef}
+          className={cn(
+            "h-auto max-h-[70vh] w-auto max-w-full object-contain",
+            state === "error" && "invisible",
+          )}
+          src={src}
+          controls
+          autoPlay
+          loop
+          playsInline
+          preload="auto"
+          onLoadedMetadata={markReady}
+          onLoadedData={markReady}
+          onCanPlay={markReady}
+          onPlaying={markReady}
+          onTimeUpdate={markReady}
+          onError={markError}
+        />
+        {state === "loading" ? (
+          // Keep the video interactive underneath; only show a non-blocking spinner.
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center pt-3">
+            <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs text-white">
+              <Spinner className="size-3.5 text-white" />
+              {t("common.loading")}
+            </span>
+          </div>
+        ) : null}
+        {state === "ready" && blockedUnmuted ? (
+          <div className="absolute inset-x-0 bottom-14 flex justify-center px-3">
+            <Button type="button" variant="secondary" size="sm" onClick={() => void enableSound()}>
+              {t("media.videos.enableSound")}
+            </Button>
+          </div>
+        ) : null}
+        {state === "error" ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black px-6 text-center text-white">
+            <AlertCircle className="size-6 text-red-400" />
+            <p className="text-sm">{t("media.videos.previewUnavailable")}</p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={retry}>
+                <RefreshCw />
+                {t("common.retry")}
+              </Button>
+              <Button type="button" variant="secondary" size="sm" asChild>
+                <a href={src} target="_blank" rel="noreferrer">
+                  <Eye />
+                  {t("media.videos.openInNewTab")}
+                </a>
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div className="flex justify-end">
+        <Button type="button" variant="ghost" size="sm" asChild>
+          <a href={src} target="_blank" rel="noreferrer">
+            <Eye />
+            {t("media.videos.openInNewTab")}
+          </a>
+        </Button>
+      </div>
     </div>
   );
-}
-
-function showFirstVideoFrame(video: HTMLVideoElement): void {
-  if (!Number.isFinite(video.duration) || video.duration <= 0) return;
-  video.currentTime = Math.min(0.01, video.duration / 2);
 }
 
 function isTerminalVideoJob(job: MediaJobDTO): boolean {
