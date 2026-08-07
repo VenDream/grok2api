@@ -70,7 +70,7 @@ func TestResolveImportTargetPinsValidatedPublicAddress(t *testing.T) {
 		}
 		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 	})
-	target, err := resolveImportTarget(context.Background(), parsed, resolver)
+	target, err := resolveImportTarget(context.Background(), parsed, resolver, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestResolveImportTargetPinsValidatedPublicAddress(t *testing.T) {
 	if target.hostHeader != "Images.Example.test" || target.serverName != "images.example.test" {
 		t.Fatalf("host header=%q server name=%q", target.hostHeader, target.serverName)
 	}
-	client, transport := newIngestHTTPClient(target)
+	client, transport := newIngestHTTPClient(target, false)
 	defer transport.CloseIdleConnections()
 	if client.CheckRedirect == nil || transport.TLSClientConfig == nil || transport.TLSClientConfig.ServerName != "images.example.test" || transport.TLSClientConfig.MinVersion != tls.VersionTLS12 {
 		t.Fatal("pinned HTTPS client did not preserve strict TLS verification")
@@ -95,8 +95,28 @@ func TestResolveImportTargetRejectsAnyNonPublicDNSAnswer(t *testing.T) {
 	resolver := importResolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("127.0.0.1")}, nil
 	})
-	if _, err := resolveImportTarget(context.Background(), parsed, resolver); !errors.Is(err, errFetchBlocked) {
+	if _, err := resolveImportTarget(context.Background(), parsed, resolver, false); !errors.Is(err, errFetchBlocked) {
 		t.Fatalf("mixed public/private DNS answer was not blocked: %v", err)
+	}
+}
+
+func TestResolveImportTargetAllowsNonPublicWhenInsecure(t *testing.T) {
+	parsed, err := url.Parse("https://images.example.test/photo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := importResolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("198.18.0.9")}, nil
+	})
+	if _, err := resolveImportTarget(context.Background(), parsed, resolver, false); !errors.Is(err, errFetchBlocked) {
+		t.Fatalf("secure mode should block fake-ip: %v", err)
+	}
+	target, err := resolveImportTarget(context.Background(), parsed, resolver, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.fetchURL.Host != "198.18.0.9:443" {
+		t.Fatalf("insecure fetch host = %s", target.fetchURL.Host)
 	}
 }
 
@@ -109,7 +129,7 @@ func TestResolveImportTargetDoesNotClassifyDNSFailureAsPolicyBlock(t *testing.T)
 	resolver := importResolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
 		return nil, lookupErr
 	})
-	_, err = resolveImportTarget(context.Background(), parsed, resolver)
+	_, err = resolveImportTarget(context.Background(), parsed, resolver, false)
 	if !errors.Is(err, lookupErr) || errors.Is(err, errFetchBlocked) {
 		t.Fatalf("DNS failure classification = %v", err)
 	}

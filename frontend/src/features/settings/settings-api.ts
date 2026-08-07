@@ -15,7 +15,7 @@ export type SettingsConfigDTO = {
   providerConsole: { baseURL: string; chatTimeout: string; streamIdleTimeout: string };
   batch: { importConcurrency: number; conversionConcurrency: number; syncConcurrency: number; refreshConcurrency: number; randomDelay: string };
   media: {
-    maxImageBytes: number; maxTotalBytes: number; cleanupThresholdPercent: number;
+    maxImageBytes: number; maxTotalBytes: number; cleanupThresholdPercent: number; allowInsecureRemoteImageFetch?: boolean;
     cleanupInterval: string;
   };
   frontend: { publicApiBaseURL: string };
@@ -125,7 +125,7 @@ const settingsConfigValidator = hasShape({
   }),
   providerConsole: hasShape({ baseURL: isString, chatTimeout: isString, streamIdleTimeout: isOptional(isString) }),
   batch: hasShape({ importConcurrency: isNumber, conversionConcurrency: isNumber, syncConcurrency: isNumber, refreshConcurrency: isNumber, randomDelay: isString }),
-  media: hasShape({ maxImageBytes: isNumber, maxTotalBytes: isNumber, cleanupThresholdPercent: isNumber, cleanupInterval: isString }),
+  media: hasShape({ maxImageBytes: isNumber, maxTotalBytes: isNumber, cleanupThresholdPercent: isNumber, cleanupInterval: isString, allowInsecureRemoteImageFetch: isOptional(isBoolean) }),
   frontend: hasShape({ publicApiBaseURL: isString }),
   routing: hasShape({
     stickyTTL: isString, cooldownBase: isString, cooldownMax: isString, capacityWait: isString, maxAttempts: isNumber, videoMaxAttempts: isNumber, preferFreeBuild: isBoolean, markBuildChatDeniedAsReauth: isBoolean,
