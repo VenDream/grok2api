@@ -4,6 +4,7 @@ import { marked } from "marked";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import type { ModelRouteDTO } from "@/entities/model/types";
 import {
   createChatResponse,
   createVideo,
+  editImage,
   editVideo,
   extendVideo,
   generateImage,
@@ -41,6 +43,8 @@ import {
 } from "@/features/creative-console/creative-console-api";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
 import { importVideoInputFromURL, uploadMediaInput } from "@/features/media/media-api";
+import { ReferenceImagePicker } from "@/shared/components/reference-image-picker";
+import { useReferenceImages } from "@/shared/hooks/use-reference-images";
 import { PageHeader } from "@/shared/components/page-header";
 import { cn } from "@/shared/lib/cn";
 
@@ -870,22 +874,79 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const { t } = useTranslation();
   const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState("1");
-  const [aspectRatio, setAspectRatio] = useState("1:1");
+  const [aspectRatio, setAspectRatio] = useState("auto");
   const [resolution, setResolution] = useState("1k");
   const [quality, setQuality] = useState<"low" | "medium">("medium");
   const [images, setImages] = useState<ImageResult[]>([]);
+  const references = useReferenceImages(8);
+  const isEditMode = references.hasReferences;
   const supportsQuality = model.toLowerCase().endsWith("grok-imagine-image-2.0");
+  const imageAspectOptions = ["auto", ...imageAspectRatios.filter((item) => item !== "auto")];
 
   const mutation = useMutation({
-    mutationFn: (request: Parameters<typeof generateImage>[0]) => generateImage(request),
+    mutationFn: async (request: {
+      apiKey: string;
+      model: string;
+      prompt: string;
+      count: number;
+      aspectRatio: string;
+      resolution: string;
+      quality?: "low" | "medium";
+      imageURLs?: string[];
+    }) => {
+      if (request.imageURLs && request.imageURLs.length > 0) {
+        return editImage({
+          apiKey: request.apiKey,
+          model: request.model,
+          prompt: request.prompt,
+          imageURLs: request.imageURLs,
+          count: request.count,
+          aspectRatio: request.aspectRatio,
+          resolution: request.resolution,
+        });
+      }
+      return generateImage({
+        apiKey: request.apiKey,
+        model: request.model,
+        prompt: request.prompt,
+        count: request.count,
+        aspectRatio: request.aspectRatio === "auto" ? "1:1" : request.aspectRatio,
+        resolution: request.resolution,
+        quality: request.quality,
+      });
+    },
     onSuccess: setImages,
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t("errors.generic"), { duration: 6000 });
+    },
   });
 
-  function submit(event: FormEvent): void {
+  async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (!apiKey || !model || !prompt.trim() || mutation.isPending) return;
+    let imageURLs: string[] = [];
+    try {
+      imageURLs = await references.resolveURLs();
+    } catch {
+      references.setError(t("creativeConsole.errors.imageReferenceReadFailed"));
+      return;
+    }
+    if (imageURLs.length > 8) {
+      references.setError(t("creativeConsole.errors.imageReferenceLimit", { count: 8 }));
+      return;
+    }
+    references.setError("");
     mutation.reset();
-    mutation.mutate({ apiKey, model, prompt: prompt.trim(), count: Number(count), aspectRatio, resolution, quality: supportsQuality ? quality : undefined });
+    mutation.mutate({
+      apiKey,
+      model,
+      prompt: prompt.trim(),
+      count: Number(count),
+      aspectRatio,
+      resolution,
+      quality: supportsQuality ? quality : undefined,
+      imageURLs: imageURLs.length > 0 ? imageURLs : undefined,
+    });
   }
 
   return (
@@ -893,7 +954,9 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
       <div className="min-h-0 flex-1 overflow-y-auto py-6">
         <div className="flex min-h-full w-full flex-col justify-center px-3 sm:px-6">
           {images.length === 0 && !mutation.isPending ? <WelcomeState title={t("creativeConsole.welcomeImage")} /> : null}
-          {mutation.isPending ? <LoadingResult text={t("creativeConsole.generatingImage")} /> : null}
+          {mutation.isPending ? (
+            <LoadingResult text={isEditMode ? t("creativeConsole.editingImage") : t("creativeConsole.generatingImage")} />
+          ) : null}
           {images.length > 0 ? (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-live="polite">
               {images.map((image, index) => (
@@ -910,19 +973,38 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
         </div>
       </div>
 
-      <form className="w-full shrink-0 px-3 pb-2 sm:px-6 sm:pb-3" onSubmit={submit}>
+      <form className="w-full shrink-0 px-3 pb-2 sm:px-6 sm:pb-3" onSubmit={(event) => void submit(event)}>
         <div className={composerClassName}>
-          <Textarea id="image-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t("creativeConsole.imagePlaceholder")} className="min-h-24 resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0" />
+          <Textarea
+            id="image-prompt"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder={isEditMode ? t("creativeConsole.imageEditPlaceholder") : t("creativeConsole.imagePlaceholder")}
+            className="min-h-24 resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0"
+          />
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-3">
             <div className="flex min-w-0 flex-wrap items-center gap-1">
               <CompactModelSelect value={model} models={modelOptions} onChange={onModelChange} />
+              <ReferenceImagePicker
+                controller={references}
+                localHint={t("creativeConsole.localReferenceHint")}
+                remoteHint={t("creativeConsole.remoteReferenceHint")}
+              />
               <CompactSelect value={count} options={["1", "2", "3", "4"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
-              <CompactSelect value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
+              <CompactSelect value={aspectRatio} options={imageAspectOptions} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
               <CompactSelect value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} />
               {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
             </div>
-            <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}>{mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
+            <Button
+              type="submit"
+              size="icon"
+              aria-label={isEditMode ? t("creativeConsole.editImage") : t("creativeConsole.generateImage")}
+              disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}
+            >
+              {mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+            </Button>
           </div>
+          {references.error ? <div className="px-3 pb-2 text-[11px] text-destructive">{references.error}</div> : null}
         </div>
         {mutation.isError ? <div className="mt-1 px-2 text-[11px] text-destructive">{mutation.error.message}</div> : null}
       </form>
