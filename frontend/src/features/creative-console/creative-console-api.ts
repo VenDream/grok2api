@@ -113,6 +113,38 @@ export async function generateImage(input: {
   return images.map((image) => ({ ...image, url: resolveMediaURL(image.url) }));
 }
 
+export async function editImage(input: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  imageURLs: string[];
+  count: number;
+  aspectRatio: string;
+  resolution: string;
+  signal?: AbortSignal;
+}): Promise<ImageResult[]> {
+  const imageURLs = input.imageURLs.map((value) => value.trim()).filter(Boolean);
+  if (imageURLs.length === 0 || imageURLs.length > 8) {
+    throw new CreativeApiError(400, "image edits require 1 to 8 reference images", "invalid_request");
+  }
+  const body: Record<string, unknown> = {
+    model: input.model,
+    prompt: input.prompt,
+    n: input.count,
+    resolution: input.resolution,
+    response_format: "url",
+    stream: false,
+  };
+  const ratio = input.aspectRatio.trim().toLowerCase();
+  if (ratio && ratio !== "auto") body.aspect_ratio = input.aspectRatio;
+  if (imageURLs.length === 1) body.image = { url: imageURLs[0] };
+  else body.images = imageURLs.map((url) => ({ url }));
+  const payload = await publicApiRequest(input.apiKey, "/images/edits", { method: "POST", body, signal: input.signal });
+  const images = readImages(payload);
+  if (images.length === 0) throw new CreativeApiError(200, "The image response did not contain any images", "invalid_response");
+  return images.map((image) => ({ ...image, url: resolveMediaURL(image.url) }));
+}
+
 export async function createVideo(input: {
   apiKey: string;
   model: string;

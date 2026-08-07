@@ -145,6 +145,8 @@ body,
 
 html {
   color-scheme: light;
+  /* Reduce accidental double-tap zoom on mobile control surfaces. */
+  touch-action: manipulation;
 }
 
 html.dark {
@@ -159,6 +161,7 @@ body {
   font-size: 14px;
   letter-spacing: 0;
   text-rendering: optimizeLegibility;
+  touch-action: manipulation;
 }
 
 ::selection {
