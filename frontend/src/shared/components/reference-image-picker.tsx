@@ -1,4 +1,5 @@
 import { ImagePlus, RefreshCw, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -21,10 +22,23 @@ export function ReferenceImagePicker({
   controller,
   localHint,
   remoteHint,
+  disabled = false,
+  title,
+  triggerLabel,
+  triggerActiveLabel,
+  icon,
 }: {
   controller: ReferenceImagesController;
   localHint: string;
   remoteHint: string;
+  disabled?: boolean;
+  /** Popover title; defaults to reference-image copy. */
+  title?: string;
+  /** Trigger label when empty. */
+  triggerLabel?: string;
+  /** Trigger label when items are selected; falls back to count. */
+  triggerActiveLabel?: string;
+  icon?: ReactNode;
 }) {
   const { t } = useTranslation();
   const {
@@ -47,6 +61,10 @@ export function ReferenceImagePicker({
     removeRemoteURLField,
   } = controller;
   const allowMultiple = maxCount > 1;
+  const titleText = title ?? t("creativeConsole.referenceImage");
+  const emptyLabel = triggerLabel ?? t("creativeConsole.referenceImageShort");
+  const activeLabel = triggerActiveLabel
+    ?? t("creativeConsole.referenceImageCount", { count: activeCount });
 
   return (
     <Popover>
@@ -56,17 +74,16 @@ export function ReferenceImagePicker({
           variant="ghost"
           size="sm"
           className={cn("h-8 gap-1.5 px-2 font-normal", hasReferences && "bg-secondary/70 text-foreground")}
-          aria-label={t("creativeConsole.referenceImage")}
+          aria-label={titleText}
+          disabled={disabled}
         >
-          <ImagePlus />
-          {hasReferences
-            ? t("creativeConsole.referenceImageCount", { count: activeCount })
-            : t("creativeConsole.referenceImageShort")}
+          {icon ?? <ImagePlus />}
+          {hasReferences ? activeLabel : emptyLabel}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[22rem] space-y-3 p-3">
         <div className="flex items-center justify-between gap-2">
-          <div className="text-xs font-medium">{t("creativeConsole.referenceImage")}</div>
+          <div className="text-xs font-medium">{titleText}</div>
           <div className="text-[11px] text-muted-foreground">{activeCount}/{maxCount}</div>
         </div>
         <Tabs value={mode} onValueChange={(value) => setMode(value as ImageReferenceMode)}>

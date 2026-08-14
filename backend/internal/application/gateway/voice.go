@@ -82,7 +82,7 @@ type voiceExecutionResult struct {
 
 func (s *Service) SynthesizeSpeech(ctx context.Context, input TTSInput) (*Result, error) {
 	reservation, _ := audit.EstimateOfficialTTSCost(input.Text)
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, true, reservation, func(providerValue accountdomain.Provider) bool {
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, true, true, reservation, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (voiceExecutionResult, error) {
@@ -127,7 +127,8 @@ func (s *Service) SynthesizeSpeech(ctx context.Context, input TTSInput) (*Result
 }
 
 func (s *Service) ListTTSVoices(ctx context.Context, input VoiceListInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, audit.PricingResult{}, func(providerValue accountdomain.Provider) bool {
+	// Metadata only: do not write request audits for voice catalog lookups.
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, false, audit.PricingResult{}, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, _ string) (voiceExecutionResult, error) {
@@ -156,7 +157,8 @@ func (s *Service) ListTTSVoices(ctx context.Context, input VoiceListInput) (*Res
 }
 
 func (s *Service) GetTTSVoice(ctx context.Context, input VoiceIDInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, audit.PricingResult{}, func(providerValue accountdomain.Provider) bool {
+	// Metadata only: do not write request audits for single-voice lookups.
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, false, audit.PricingResult{}, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, _ string) (voiceExecutionResult, error) {
@@ -181,7 +183,7 @@ func (s *Service) GetTTSVoice(ctx context.Context, input VoiceIDInput) (*Result,
 }
 
 func (s *Service) TranscribeSpeech(ctx context.Context, input STTInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationSTT, modeldomain.CapabilitySTT, true, audit.PricingResult{}, func(providerValue accountdomain.Provider) bool {
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationSTT, modeldomain.CapabilitySTT, true, true, audit.PricingResult{}, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.STT(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (voiceExecutionResult, error) {
@@ -276,6 +278,7 @@ func (s *Service) executeVoice(
 	operation audit.Operation,
 	capability modeldomain.Capability,
 	consumesQuota bool,
+	recordAudit bool,
 	reservation audit.PricingResult,
 	supports voiceProviderSupport,
 	execute func(context.Context, accountdomain.Provider, accountdomain.Credential, string) (voiceExecutionResult, error),
@@ -313,6 +316,9 @@ func (s *Service) executeVoice(
 		}
 	}
 	writeFailureAudit := func(statusCode int, errorCode string, credential *accountdomain.Credential) {
+		if !recordAudit {
+			return
+		}
 		record := auditBase
 		record.StatusCode = statusCode
 		record.ErrorCode = errorCode
@@ -495,10 +501,12 @@ func (s *Service) executeVoice(
 					s.accounts.QueueQuotaRefresh(accountID, quotaMode)
 				}
 			}
-			if err := budget.run("audit", finalizationAuditBudget, func(stageCtx context.Context) error {
-				return s.audits.Create(stageCtx, record)
-			}); err != nil {
-				s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", requestID, "error", err)
+			if recordAudit {
+				if err := budget.run("audit", finalizationAuditBudget, func(stageCtx context.Context) error {
+					return s.audits.Create(stageCtx, record)
+				}); err != nil {
+					s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", requestID, "error", err)
+				}
 			}
 		})
 	}

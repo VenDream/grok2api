@@ -709,53 +709,31 @@ func TestLiteChatRejectsInvalidImageConfigBeforeUpstream(t *testing.T) {
 	}
 }
 
-func TestLiteChatStreamFailsBeforeReturningSuccessResponse(t *testing.T) {
-	server := fhttptest.NewServer(fhttp.HandlerFunc(func(writer fhttp.ResponseWriter, request *fhttp.Request) {
-		if request.URL.Path != "/ws/mgw/" {
-			fhttp.NotFound(writer, request)
-			return
-		}
-		connection, err := (&websocket.Upgrader{CheckOrigin: func(*fhttp.Request) bool { return true }}).Upgrade(writer, request, nil)
-		if err != nil {
-			t.Errorf("upgrade: %v", err)
-			return
-		}
-		defer connection.Close()
-		var initial map[string]any
-		if err := connection.ReadJSON(&initial); err != nil {
-			t.Errorf("read session.create: %v", err)
-			return
-		}
-		initialID := initial["event"].(map[string]any)["event_id"].(string)
-		_ = connection.WriteJSON(map[string]any{"session_id": "conv_1", "event": map[string]any{"type": "session.created", "client_event_id": initialID}})
-		_ = connection.WriteJSON(map[string]any{"session_id": "conv_1", "event": map[string]any{"type": "conversation.attached", "conversation": map[string]any{"id": "conv_1"}}})
-		for range 2 {
-			var event map[string]any
-			if err := connection.ReadJSON(&event); err != nil {
-				t.Errorf("read turn event: %v", err)
-				return
-			}
-		}
-		_ = connection.WriteJSON(map[string]any{"session_id": "conv_1", "event": map[string]any{"type": "response.done", "response": map[string]any{"id": "parent_1", "status": "completed"}}})
-	}))
-	defer server.Close()
-
-	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encrypted, err := cipher.Encrypt("test-sso")
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter := NewAdapter(Config{BaseURL: server.URL, StatsigMode: "manual"}, infraegress.NewManager(egressRepositoryStub{}, cipher), cipher, nil, imageAssetStoreStub{})
+func TestLiteChatStreamRejectsStreaming(t *testing.T) {
+	// Lite image generation now goes through non-streaming Imagine WS for aspect
+	// ratio support; chat/completions stream=true must fail closed up front.
+	adapter := NewAdapter(Config{BaseURL: "https://example.invalid", StatsigMode: "manual"}, nil, nil, nil, imageAssetStoreStub{})
 	response, err := adapter.ForwardResponse(context.Background(), provider.ResponseResourceRequest{
-		Credential: account.Credential{ID: 1, Provider: account.ProviderWeb, UserID: "497f19f8-49d4-458a-bee4-43ec3dcaf8ca", EncryptedAccessToken: encrypted},
+		Credential: account.Credential{ID: 1, Provider: account.ProviderWeb, UserID: "497f19f8-49d4-458a-bee4-43ec3dcaf8ca"},
 		Method:     http.MethodPost, Path: "/v1/chat/completions", Model: "grok-imagine-image", Operation: conversation.OperationChat,
 		Body: []byte(`{"model":"grok-imagine-image-lite","stream":true,"messages":[{"role":"user","content":"draw a cat"}]}`), Streaming: true,
 	})
-	if err == nil || response != nil || !strings.Contains(err.Error(), "未解析到最终图片") {
-		t.Fatalf("response=%#v error=%v", response, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if response == nil || response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("response=%#v", response)
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		t.Fatalf("body=%s", body)
+	}
+	errorValue, _ := payload["error"].(map[string]any)
+	message, _ := errorValue["message"].(string)
+	if !strings.Contains(message, "不支持 stream") {
+		t.Fatalf("message=%q body=%s", message, body)
 	}
 }
 
@@ -1352,19 +1330,28 @@ func TestImagineRequestContainsOnlyProtocolProperties(t *testing.T) {
 
 func TestImagineModelAndGenerationCountMapping(t *testing.T) {
 	tests := []struct {
+		model string
 		count int
 		pro   bool
 	}{
-		{count: 1},
-		{count: 2},
-		{count: 8, pro: true},
-		{count: 10, pro: true},
+		{model: "imagine", count: 1},
+		{model: "imagine", count: 2},
+		{model: "imagine", count: 8, pro: true},
+		{model: "imagine", count: 10, pro: true},
+		{model: "imagine-lite", count: 3},
 	}
 	for _, test := range tests {
-		config, ok := resolveImagineModel("imagine", test.pro, test.count)
+		config, ok := resolveImagineModel(test.model, test.pro, test.count)
 		if !ok || config.Pro != test.pro || config.ExpectedCount != test.count || config.MaxReturnCount != 10 {
-			t.Fatalf("pro=%v count=%d config=%#v", test.pro, test.count, config)
+			t.Fatalf("model=%s pro=%v count=%d config=%#v", test.model, test.pro, test.count, config)
 		}
+	}
+	lite, ok := resolveImagineModel("imagine-lite", true, 3)
+	if !ok || lite.Pro {
+		t.Fatalf("lite should ignore requested pro: %#v ok=%v", lite, ok)
+	}
+	if _, ok := resolveImagineModel("unknown", false, 1); ok {
+		t.Fatal("unknown model should not resolve")
 	}
 }
 
