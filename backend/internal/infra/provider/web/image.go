@@ -70,10 +70,15 @@ type imagineCollector struct {
 }
 
 func resolveImagineModel(model string, pro bool, count int) (imagineModelConfig, bool) {
-	if model != "imagine" {
+	switch strings.TrimSpace(model) {
+	case "imagine":
+		return imagineModelConfig{Pro: pro, ExpectedCount: count, MaxReturnCount: 10}, true
+	case "imagine-lite":
+		// Lite uses the same Imagine WS path so aspect_ratio applies; enable_pro stays off.
+		return imagineModelConfig{Pro: false, ExpectedCount: count, MaxReturnCount: 10}, true
+	default:
 		return imagineModelConfig{}, false
 	}
-	return imagineModelConfig{Pro: pro, ExpectedCount: count, MaxReturnCount: 10}, true
 }
 
 func invalidImageRequest(message string) (*provider.Response, error) {
@@ -262,6 +267,9 @@ func numberAsInt(value any) (int, bool) {
 }
 
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
+	if strings.TrimSpace(request.Quality) != "" {
+		return invalidImageRequest("Grok Web 图片模型不支持 quality")
+	}
 	count := request.Count
 	if count <= 0 {
 		count = 1
@@ -297,11 +305,22 @@ func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGener
 		if count > maxGeneratedImages {
 			return invalidImageRequest("n 不能超过 10")
 		}
-		return a.generateLiteImage(ctx, request, count, format)
 	}
 	ratio, err := resolveImageAspectRatio(request.AspectRatio, request.Size)
 	if err != nil {
 		return invalidImageRequest(err.Error())
+	}
+	resolution := strings.ToLower(strings.TrimSpace(request.Resolution))
+	if resolution == "" {
+		resolution = "1k"
+	}
+	if resolution != "1k" && resolution != "2k" {
+		return invalidImageRequest("resolution 必须是 1k 或 2k")
+	}
+	// Web resolution=2k is not a real pixel class here. Use Console for true 2k;
+	// Web "pro" is selected via grok-imagine-image-2.0 (ImaginePro / enable_pro).
+	if resolution == "2k" {
+		return invalidImageRequest("Grok Web 图片模型不支持 resolution=2k；请改用 Console 的 grok-imagine-image，或 Web 的 grok-imagine-image-2.0（enable_pro）")
 	}
 	modelConfig, ok := resolveImagineModel(protocolModel, spec.ImaginePro, count)
 	if !ok {
@@ -491,46 +510,12 @@ func (a *Adapter) forwardImageChatCompletion(ctx context.Context, request provid
 	if format != "url" && format != "b64_json" {
 		return invalidImageRequest("image_config.response_format 必须是 url 或 b64_json")
 	}
-	if spec.ProtocolModel != "imagine-lite" {
-		return a.forwardQualityImageChatCompletion(ctx, request, input, normalized, count, format)
+	if spec.ProtocolModel == "imagine-lite" && (input.Stream || request.Streaming) {
+		return invalidImageRequest("grok-imagine-image-lite 不支持 stream")
 	}
-	responseID := newWebID("resp")
-	parsed := parsedChat{ResponseID: responseID, InputTokens: estimateTokens(normalized.Prompt)}
-	for range count {
-		rawURL, err := a.generateLiteImageURL(ctx, request.Credential, spec, normalized.Prompt)
-		if err != nil {
-			var mediaErr *webMediaUpstreamError
-			if errors.As(err, &mediaErr) && parsed.Text.Len() == 0 {
-				return mediaErr.providerResponse(), nil
-			}
-			var upstreamErr *liteUpstreamError
-			if errors.As(err, &upstreamErr) && parsed.Text.Len() == 0 {
-				return upstreamErr.Response(), nil
-			}
-			return nil, err
-		}
-		item, err := a.imageDataItem(ctx, request.Credential, imagineImageValue{URL: rawURL}, format)
-		if err != nil {
-			return nil, err
-		}
-		if parsed.Text.Len() > 0 {
-			parsed.appendText("\n\n")
-		}
-		parsed.appendText(liteImageMarkdown(item))
-	}
-	if input.Stream || request.Streaming {
-		stream, err := buildImageCompatibilityStream(request.Operation, responseID, input.Model, &parsed)
-		if err != nil {
-			return nil, err
-		}
-		return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: io.NopCloser(bytes.NewReader(stream)), QuotaUnits: count}, nil
-	}
-	payload := buildOpenAIResult(request.Operation, responseID, input.Model, parsed, false)
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: jsonHeaders(), Body: io.NopCloser(bytes.NewReader(data)), QuotaUnits: count}, nil
+	// Lite and quality chat-compat both go through GenerateImage so aspect_ratio
+	// is applied consistently (Imagine WS, not the legacy Drawing chat path).
+	return a.forwardQualityImageChatCompletion(ctx, request, input, normalized, count, format)
 }
 
 func (a *Adapter) forwardQualityImageChatCompletion(ctx context.Context, request provider.ResponseResourceRequest, input openAIRequest, normalized normalizedChatInput, count int, format string) (*provider.Response, error) {

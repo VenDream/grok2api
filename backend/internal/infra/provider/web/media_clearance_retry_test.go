@@ -108,7 +108,7 @@ func TestGenerateWSImageReacquiresAfterChallengeHandshake(t *testing.T) {
 	enableTestClearance(adapter, server.URL)
 	response, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{
 		Credential: credential, Model: "grok-imagine-image-quality", Prompt: "draw a teapot", Count: 1,
-		Resolution: "2k", Quality: "medium", ResponseFormat: "b64_json",
+		Resolution: "1k", ResponseFormat: "b64_json",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -250,13 +250,14 @@ func TestStructuredImageForbiddenDoesNotInvalidateClearance(t *testing.T) {
 }
 
 func TestLiteChallengeRetryExhaustionReturnsNormalizedJSON(t *testing.T) {
+	// Lite image generation now uses Imagine WS (for aspect_ratio), not the legacy Drawing /ws/mgw path.
 	var handshakes atomic.Int32
 	var solverCalls atomic.Int32
 	server := fhttptest.NewServer(fhttp.HandlerFunc(func(writer fhttp.ResponseWriter, request *fhttp.Request) {
 		switch request.URL.Path {
 		case "/v1":
 			writeTestClearanceSolution(t, writer, solverCalls.Add(1))
-		case "/ws/mgw/":
+		case "/ws/imagine/listen":
 			handshakes.Add(1)
 			writer.Header().Set("Content-Type", "text/html")
 			writer.WriteHeader(http.StatusForbidden)

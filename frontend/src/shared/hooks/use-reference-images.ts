@@ -150,6 +150,16 @@ export function useReferenceImages(maxCount: number) {
     return Promise.all(localReferences.slice(0, maxCount).map((item) => readFileAsDataURL(item.file)));
   }
 
+  function clear(): void {
+    setLocalReferences((current) => {
+      for (const item of current) URL.revokeObjectURL(item.previewURL);
+      return [];
+    });
+    setRemoteURLs([""]);
+    setError("");
+    replaceTargetIdRef.current = null;
+  }
+
   return {
     maxCount,
     mode,
@@ -170,6 +180,7 @@ export function useReferenceImages(maxCount: number) {
     addRemoteURLField,
     removeRemoteURLField,
     resolveURLs,
+    clear,
   };
 }
 

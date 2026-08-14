@@ -197,6 +197,7 @@ export function CreativeConsolePage() {
     <div className="flex h-[calc(100dvh-5rem)] min-h-[36rem] flex-col gap-5 overflow-hidden">
       <PageHeader title={t("creativeConsole.title")} description={t("creativeConsole.description")} />
 
+      {/* Temporarily hide DEEIX Chat promo
       <aside className="flex shrink-0 flex-col gap-2 rounded-lg bg-secondary/45 px-4 py-2.5 text-xs leading-5 text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="flex min-w-0 items-center gap-3">
           <Sparkle className="size-4 shrink-0 text-foreground/70" />
@@ -206,6 +207,7 @@ export function CreativeConsolePage() {
           {t("creativeConsole.promotionAction")}<ExternalLink className="size-3.5" />
         </a>
       </aside>
+      */}
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-9 shrink-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -239,10 +241,10 @@ export function CreativeConsolePage() {
         </div>
 
         <div className="min-h-0 flex-1">
-          <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={effectiveKeyId || "default"} storageScope={effectiveKeyId || "default"} toolbarElement={chatToolbarElement} {...panelProps("chat")} /></div>
-          <div className="h-full" hidden={mode !== "image"}><ImagePanel {...panelProps("image")} /></div>
-          <div className="h-full" hidden={mode !== "video"}><VideoPanel {...panelProps("video")} /></div>
-          <div className="h-full" hidden={mode !== "voice"}><VoicePanel {...panelProps("voice")} /></div>
+          <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={effectiveKeyId || "default"} storageScope={effectiveKeyId || "default"} toolbarElement={chatToolbarElement} {...panelProps("chat")} active={mode === "chat"} /></div>
+          <div className="h-full" hidden={mode !== "image"}><ImagePanel {...panelProps("image")} active={mode === "image"} /></div>
+          <div className="h-full" hidden={mode !== "video"}><VideoPanel {...panelProps("video")} active={mode === "video"} /></div>
+          <div className="h-full" hidden={mode !== "voice"}><VoicePanel {...panelProps("voice")} active={mode === "voice"} /></div>
         </div>
       </section>
     </div>
@@ -254,6 +256,8 @@ type CreativePanelProps = {
   model: string;
   modelOptions: ModelRouteDTO[];
   onModelChange: (model: string) => void;
+  /** False while the panel is hidden; keeps background panels from issuing side-effect queries. */
+  active?: boolean;
 };
 
 function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & { storageScope: string; toolbarElement: HTMLDivElement | null }) {
@@ -419,6 +423,9 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
       }));
       requestControllerRef.current = null;
       activeRequestSeqRef.current = 0;
+      if (!aborted) {
+        toast.error(error instanceof Error ? error.message : t("errors.generic"), { duration: 6000 });
+      }
     },
   });
 
@@ -822,7 +829,6 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
             )}
           </div>
         </div>
-        {mutation.isError ? <div className="mt-1 px-2 text-[11px] text-destructive">{mutation.error.message}</div> : null}
       </form>
 
       <AlertDialog open={pendingTruncate !== null} onOpenChange={(open) => { if (!open) setPendingTruncate(null); }}>
@@ -879,9 +885,34 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const [quality, setQuality] = useState<"low" | "medium">("medium");
   const [images, setImages] = useState<ImageResult[]>([]);
   const references = useReferenceImages(8);
-  const isEditMode = references.hasReferences;
-  const supportsQuality = model.toLowerCase().endsWith("grok-imagine-image-2.0");
+  const selectedRoute = modelOptions.find((item) => item.publicId === model);
+  const modelID = model.toLowerCase();
+  const supportsQuality = modelID.endsWith("grok-imagine-image-2.0");
+  // Real 2k is Console official media API. Web *-lite (including quality-lite)
+  // still returns ~1k even when 2k/enable_pro is requested.
+  const supports2kResolution = selectedRoute?.provider === "grok_console";
+  // Console image models also expose image_edit. Web free lite only generates;
+  // Web editing is the separate Super-only grok-imagine-image-edit route.
+  const supportsImageEdit = selectedRoute?.provider === "grok_console"
+    || selectedRoute?.capability === "image_edit"
+    || modelID.includes("image-edit");
+  const isEditMode = supportsImageEdit && references.hasReferences;
+  const resolutionOptions: readonly string[] = supports2kResolution ? imageResolutions : ["1k"];
+  // Derive the effective resolution so unsupported 2k never needs a syncing effect.
+  const selectedResolution = resolutionOptions.includes(resolution) ? resolution : "1k";
   const imageAspectOptions = ["auto", ...imageAspectRatios];
+
+  function handleImageModelChange(nextModel: string): void {
+    const nextRoute = modelOptions.find((item) => item.publicId === nextModel);
+    const nextID = nextModel.toLowerCase();
+    const nextSupportsEdit = nextRoute?.provider === "grok_console"
+      || nextRoute?.capability === "image_edit"
+      || nextID.includes("image-edit");
+    if (!nextSupportsEdit) references.clear();
+    const nextSupports2k = nextRoute?.provider === "grok_console";
+    if (!nextSupports2k && resolution !== "1k") setResolution("1k");
+    onModelChange(nextModel);
+  }
 
   const mutation = useMutation({
     mutationFn: async (request: {
@@ -925,17 +956,23 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     event.preventDefault();
     if (!apiKey || !model || !prompt.trim() || mutation.isPending) return;
     let imageURLs: string[] = [];
-    try {
-      imageURLs = await references.resolveURLs();
-    } catch {
-      references.setError(t("creativeConsole.errors.imageReferenceReadFailed"));
-      return;
+    if (supportsImageEdit) {
+      try {
+        imageURLs = await references.resolveURLs();
+      } catch {
+        const message = t("creativeConsole.errors.imageReferenceReadFailed");
+        references.setError(message);
+        toast.error(message, { duration: 6000 });
+        return;
+      }
+      if (imageURLs.length > 8) {
+        const message = t("creativeConsole.errors.imageReferenceLimit", { count: 8 });
+        references.setError(message);
+        toast.error(message, { duration: 6000 });
+        return;
+      }
+      references.setError("");
     }
-    if (imageURLs.length > 8) {
-      references.setError(t("creativeConsole.errors.imageReferenceLimit", { count: 8 }));
-      return;
-    }
-    references.setError("");
     mutation.reset();
     mutation.mutate({
       apiKey,
@@ -943,7 +980,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
       prompt: prompt.trim(),
       count: Number(count),
       aspectRatio,
-      resolution,
+      resolution: selectedResolution,
       quality: supportsQuality ? quality : undefined,
       imageURLs: imageURLs.length > 0 ? imageURLs : undefined,
     });
@@ -984,15 +1021,17 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
           />
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-3">
             <div className="flex min-w-0 flex-wrap items-center gap-1">
-              <CompactModelSelect value={model} models={modelOptions} onChange={onModelChange} />
-              <ReferenceImagePicker
-                controller={references}
-                localHint={t("creativeConsole.localReferenceHint")}
-                remoteHint={t("creativeConsole.remoteReferenceHint")}
-              />
+              <CompactModelSelect value={model} models={modelOptions} onChange={handleImageModelChange} />
+              {supportsImageEdit ? (
+                <ReferenceImagePicker
+                  controller={references}
+                  localHint={t("creativeConsole.localReferenceHint")}
+                  remoteHint={t("creativeConsole.remoteReferenceHint")}
+                />
+              ) : null}
               <CompactSelect value={count} options={["1", "2", "3", "4"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
               <CompactSelect value={aspectRatio} options={imageAspectOptions} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
-              <CompactSelect value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} />
+              <CompactSelect value={selectedResolution} options={resolutionOptions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} />
               {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
             </div>
             <Button
@@ -1004,22 +1043,38 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
               {mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
             </Button>
           </div>
-          {references.error ? <div className="px-3 pb-2 text-[11px] text-destructive">{references.error}</div> : null}
         </div>
-        {mutation.isError ? <div className="mt-1 px-2 text-[11px] text-destructive">{mutation.error.message}</div> : null}
       </form>
     </div>
   );
 }
 
-function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePanelProps) {
+async function stageVideoImageInputs(controller: ReturnType<typeof useReferenceImages>): Promise<Array<{ fileId?: string; url?: string }>> {
+  if (controller.mode === "local") {
+    const staged: Array<{ fileId: string }> = [];
+    for (const item of controller.localReferences) {
+      const input = await uploadMediaInput(item.file);
+      if (input.kind !== "image") throw new Error("invalid image input");
+      staged.push({ fileId: input.fileId });
+    }
+    return staged;
+  }
+  const staged: Array<{ fileId?: string; url?: string }> = [];
+  for (const raw of controller.remoteURLs.map((value) => value.trim()).filter(Boolean)) {
+    if (/^https?:\/\//i.test(raw)) {
+      const input = await importVideoInputFromURL(raw);
+      staged.push({ fileId: input.fileId });
+    } else {
+      staged.push({ url: raw });
+    }
+  }
+  return staged;
+}
+
+function VideoPanel({ apiKey, model, modelOptions, onModelChange, active = true }: CreativePanelProps) {
   const { t } = useTranslation();
   const [action, setAction] = useState<VideoAction>("generate");
   const [prompt, setPrompt] = useState("");
-  const [imageURL, setImageURL] = useState("");
-  const [imageFileID, setImageFileID] = useState("");
-  const [referenceURL, setReferenceURL] = useState("");
-  const [referenceFileID, setReferenceFileID] = useState("");
   const [referenceVoiceId, setReferenceVoiceId] = useState("");
   const [sourceVideoURL, setSourceVideoURL] = useState("");
   const [sourceVideoFileID, setSourceVideoFileID] = useState("");
@@ -1028,12 +1083,10 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [resolution, setResolution] = useState("720p");
   const [job, setJob] = useState<{ requestId: string; apiKey: string } | null>(null);
-  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
-  const referenceFileInputRef = useRef<HTMLInputElement | null>(null);
   const videoFileInputRef = useRef<HTMLInputElement | null>(null);
-  const imageSelectionVersionRef = useRef(0);
-  const referenceSelectionVersionRef = useRef(0);
   const videoSelectionVersionRef = useRef(0);
+  const firstFrame = useReferenceImages(1);
+  const referenceImages = useReferenceImages(1);
 
   const generateModels = useMemo(() => uniqueModelsByPublicID(modelOptions.filter((item) => item.capability === "video")), [modelOptions]);
   const editModels = useMemo(() => {
@@ -1048,18 +1101,27 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     : activeModels[0]?.publicId ?? "";
 
   useEffect(() => {
+    if (!active) return;
     if (activeModel && activeModel !== model) onModelChange(activeModel);
-  }, [activeModel, model, onModelChange]);
+  }, [active, activeModel, model, onModelChange]);
+
+  // I2V first-frame vs R2V reference/voice exclusivity is enforced by disabled
+  // controls and submit priority; clear peers on user action instead of effects.
+  function selectReferenceVoice(value: string): void {
+    const next = value === "__none__" ? "" : value;
+    setReferenceVoiceId(next);
+    if (next && firstFrame.hasReferences) firstFrame.clear();
+  }
 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "video-voices", apiKey],
     queryFn: ({ signal }) => listVoices({ apiKey, model: "grok-voice-latest", signal }),
-    enabled: Boolean(apiKey && action === "generate"),
+    enabled: Boolean(active && apiKey && action === "generate"),
     staleTime: 60_000,
   });
   const voices = useMemo(() => voicesQuery.data ?? [], [voicesQuery.data]);
-  const hasFirstFrame = Boolean(imageURL.trim() || imageFileID);
-  const hasReferenceImage = Boolean(referenceURL.trim() || referenceFileID);
+  const hasFirstFrame = firstFrame.hasReferences;
+  const hasReferenceImage = referenceImages.hasReferences;
   const hasReferenceAudio = Boolean(referenceVoiceId.trim());
   const isReferenceMode = hasReferenceImage || hasReferenceAudio;
   const generateResolutions = isReferenceMode ? videoResolutions.filter((item) => item !== "1080p") : videoResolutions;
@@ -1069,37 +1131,28 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     mutationFn: async () => {
       if (!apiKey || !activeModel) throw new Error(t("creativeConsole.errors.noModels"));
       if (action === "generate") {
-        let nextImageURL = imageURL.trim() || undefined;
-        let nextImageFileID = imageFileID || undefined;
-        let nextReferenceURL = referenceURL.trim() || undefined;
-        let nextReferenceFileID = referenceFileID || undefined;
+        let imageFileID: string | undefined;
+        let imageURL: string | undefined;
+        let referencePayload: Array<{ fileId?: string; url?: string }> | undefined;
         let nextReferenceVoice = referenceVoiceId.trim() || undefined;
-        if (nextImageFileID || nextImageURL) {
-          nextReferenceURL = undefined;
-          nextReferenceFileID = undefined;
+
+        if (hasFirstFrame) {
+          const staged = await stageVideoImageInputs(firstFrame);
+          const first = staged[0];
+          imageFileID = first?.fileId;
+          imageURL = first?.url;
           nextReferenceVoice = undefined;
+        } else if (hasReferenceImage) {
+          referencePayload = await stageVideoImageInputs(referenceImages);
         }
-        if (!nextImageFileID && nextImageURL && /^https?:\/\//i.test(nextImageURL)) {
-          const staged = await importVideoInputFromURL(nextImageURL);
-          nextImageURL = undefined;
-          nextImageFileID = staged.fileId;
-        }
-        if (!nextReferenceFileID && nextReferenceURL && /^https?:\/\//i.test(nextReferenceURL)) {
-          const staged = await importVideoInputFromURL(nextReferenceURL);
-          nextReferenceURL = undefined;
-          nextReferenceFileID = staged.fileId;
-        }
+
         return createVideo({
           apiKey,
           model: activeModel,
           prompt: prompt.trim(),
-          imageURL: nextImageURL,
-          imageFileID: nextImageFileID,
-          referenceImages: nextReferenceFileID
-            ? [{ fileId: nextReferenceFileID }]
-            : nextReferenceURL
-              ? [{ url: nextReferenceURL }]
-              : undefined,
+          imageURL,
+          imageFileID,
+          referenceImages: referencePayload,
           referenceVoiceIds: nextReferenceVoice ? [nextReferenceVoice] : undefined,
           duration: Number(duration),
           aspectRatio,
@@ -1122,34 +1175,12 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
       });
     },
     onSuccess: (requestId) => setJob({ requestId, apiKey }),
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t("errors.generic"), { duration: 6000 });
+    },
   });
 
   // 本地媒体进入有 TTL 的隐藏临时区；视频任务只持久化短 file_id，不写入图库或公开 URL。
-  const uploadMutation = useMutation({
-    mutationFn: async ({ file, kind, selectionVersion }: { file: File; kind: "image" | "reference"; selectionVersion: number }) => {
-      if (file.type && !file.type.startsWith("image/")) throw new Error(t("creativeConsole.errors.invalidImage"));
-      const input = await uploadMediaInput(file);
-      if (input.kind !== "image") throw new Error(t("creativeConsole.errors.invalidImage"));
-      return { ...input, kind, selectionVersion };
-    },
-    onSuccess: (input) => {
-      if (input.kind === "image") {
-        if (input.selectionVersion !== imageSelectionVersionRef.current) return;
-        setImageFileID(input.fileId);
-        setImageURL("");
-        setReferenceURL("");
-        setReferenceFileID("");
-        setReferenceVoiceId("");
-        return;
-      }
-      if (input.selectionVersion !== referenceSelectionVersionRef.current) return;
-      setReferenceFileID(input.fileId);
-      setReferenceURL("");
-      setImageURL("");
-      setImageFileID("");
-    },
-  });
-
   const videoUploadMutation = useMutation({
     mutationFn: async ({ file }: { file: File; selectionVersion: number }) => {
       if (file.type && !file.type.startsWith("video/")) throw new Error(t("creativeConsole.errors.invalidVideo"));
@@ -1161,6 +1192,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
       if (request.selectionVersion !== videoSelectionVersionRef.current) return;
       setSourceVideoFileID(input.fileId);
       setSourceVideoURL("");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t("errors.generic"), { duration: 6000 });
     },
   });
 
@@ -1174,7 +1208,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
 
   function submit(event: FormEvent): void {
     event.preventDefault();
-    if (!apiKey || !activeModel || createMutation.isPending || uploadMutation.isPending || videoUploadMutation.isPending) return;
+    if (!apiKey || !activeModel || createMutation.isPending || videoUploadMutation.isPending) return;
     if (action === "generate") {
       if ((!prompt.trim() && !hasFirstFrame && !isReferenceMode) || !validDuration(duration)) return;
       if (isReferenceMode && !prompt.trim()) return;
@@ -1205,7 +1239,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     : action === "edit"
       ? t("creativeConsole.editVideo")
       : t("creativeConsole.extendVideo");
-  const canSubmit = Boolean(apiKey && activeModel && !createMutation.isPending && !uploadMutation.isPending && !videoUploadMutation.isPending
+  const canSubmit = Boolean(apiKey && activeModel && !createMutation.isPending && !videoUploadMutation.isPending
     && (action === "generate"
       ? ((prompt.trim() || hasFirstFrame || isReferenceMode) && (!isReferenceMode || prompt.trim()) && validDuration(duration) && !(hasFirstFrame && isReferenceMode))
       : prompt.trim() && (sourceVideoURL.trim() || sourceVideoFileID) && (action !== "extend" || (Number(extendDuration) >= 2 && Number(extendDuration) <= 10))));
@@ -1259,93 +1293,36 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
               <CompactModelSelect value={activeModel} models={activeModels} onChange={onModelChange} />
               {action === "generate" ? (
                 <>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm" className={cn("h-8 gap-1.5 px-2 font-normal", hasFirstFrame && "bg-secondary/70 text-foreground")} aria-label={t("creativeConsole.firstFrameImage")} disabled={isReferenceMode}>
-                      <ImagePlus />{hasFirstFrame ? t("creativeConsole.firstFrameImageAdded") : t("creativeConsole.firstFrameImageShort")}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent align="start" className="w-80 p-3">
-                    <div className="mb-2 text-xs font-medium">{t("creativeConsole.firstFrameImage")}</div>
-                    <div className="flex items-center gap-2">
-                      <Input id="video-image" type="url" value={imageURL} onChange={(event) => { imageSelectionVersionRef.current += 1; referenceSelectionVersionRef.current += 1; setImageURL(event.target.value); setImageFileID(""); setReferenceURL(""); setReferenceFileID(""); setReferenceVoiceId(""); }} placeholder={imageFileID ? t("creativeConsole.firstFrameImageAdded") : "https://..."} aria-label={t("creativeConsole.firstFrameImage")} />
-                      {hasFirstFrame ? <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={t("creativeConsole.clearFirstFrameImage")} onClick={() => { imageSelectionVersionRef.current += 1; setImageURL(""); setImageFileID(""); }}><X /></Button> : null}
-                    </div>
-                    <input
-                      ref={imageFileInputRef}
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp,image/gif"
-                      className="hidden"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) {
-                          const selectionVersion = imageSelectionVersionRef.current + 1;
-                          imageSelectionVersionRef.current = selectionVersion;
-                          referenceSelectionVersionRef.current += 1;
-                          setImageURL("");
-                          setImageFileID("");
-                          setReferenceURL("");
-                          setReferenceFileID("");
-                          setReferenceVoiceId("");
-                          uploadMutation.reset();
-                          uploadMutation.mutate({ file, kind: "image", selectionVersion });
-                        }
-                        event.target.value = "";
-                      }}
-                    />
-                    <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" disabled={uploadMutation.isPending} onClick={() => imageFileInputRef.current?.click()}>
-                      {uploadMutation.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
-                      {t("creativeConsole.uploadImage")}
-                    </Button>
-                    {uploadMutation.isError ? <p className="mt-1 text-[11px] text-destructive">{uploadMutation.error.message}</p> : null}
-                  </PopoverContent>
-                </Popover>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm" className={cn("h-8 gap-1.5 px-2 font-normal", hasReferenceImage && "bg-secondary/70 text-foreground")} aria-label={t("creativeConsole.referenceImage")} disabled={hasFirstFrame}>
-                      <Images />{hasReferenceImage ? t("creativeConsole.referenceImageAdded") : t("creativeConsole.referenceImageShort")}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent align="start" className="w-80 p-3">
-                    <div className="mb-2 text-xs font-medium">{t("creativeConsole.referenceImage")}</div>
-                    <div className="flex items-center gap-2">
-                      <Input id="video-reference" type="url" value={referenceURL} onChange={(event) => { referenceSelectionVersionRef.current += 1; imageSelectionVersionRef.current += 1; setReferenceURL(event.target.value); setReferenceFileID(""); setImageURL(""); setImageFileID(""); }} placeholder={referenceFileID ? t("creativeConsole.referenceImageAdded") : "https://..."} aria-label={t("creativeConsole.referenceImage")} />
-                      {hasReferenceImage ? <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={t("creativeConsole.clearReferenceImage")} onClick={() => { referenceSelectionVersionRef.current += 1; setReferenceURL(""); setReferenceFileID(""); }}><X /></Button> : null}
-                    </div>
-                    <input
-                      ref={referenceFileInputRef}
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp,image/gif"
-                      className="hidden"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) {
-                          const selectionVersion = referenceSelectionVersionRef.current + 1;
-                          referenceSelectionVersionRef.current = selectionVersion;
-                          imageSelectionVersionRef.current += 1;
-                          setReferenceURL("");
-                          setReferenceFileID("");
-                          setImageURL("");
-                          setImageFileID("");
-                          uploadMutation.reset();
-                          uploadMutation.mutate({ file, kind: "reference", selectionVersion });
-                        }
-                        event.target.value = "";
-                      }}
-                    />
-                    <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" disabled={uploadMutation.isPending} onClick={() => referenceFileInputRef.current?.click()}>
-                      {uploadMutation.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
-                      {t("creativeConsole.uploadImage")}
-                    </Button>
-                    {uploadMutation.isError ? <p className="mt-1 text-[11px] text-destructive">{uploadMutation.error.message}</p> : null}
-                  </PopoverContent>
-                </Popover>
-                <Select value={referenceVoiceId || "__none__"} onValueChange={(value) => { setReferenceVoiceId(value === "__none__" ? "" : value); if (value !== "__none__") { imageSelectionVersionRef.current += 1; setImageURL(""); setImageFileID(""); } }} disabled={hasFirstFrame}>
+                <ReferenceImagePicker
+                  controller={firstFrame}
+                  disabled={isReferenceMode}
+                  title={t("creativeConsole.firstFrameImage")}
+                  triggerLabel={t("creativeConsole.firstFrameImageShort")}
+                  triggerActiveLabel={t("creativeConsole.firstFrameImageAdded")}
+                  localHint={t("creativeConsole.videoLocalReferenceHint")}
+                  remoteHint={t("creativeConsole.videoRemoteReferenceHint")}
+                  icon={<ImagePlus />}
+                />
+                <ReferenceImagePicker
+                  controller={referenceImages}
+                  disabled={hasFirstFrame}
+                  title={t("creativeConsole.referenceImage")}
+                  triggerLabel={t("creativeConsole.referenceImageShort")}
+                  triggerActiveLabel={t("creativeConsole.referenceImageAdded")}
+                  localHint={t("creativeConsole.videoReferenceLocalHint")}
+                  remoteHint={t("creativeConsole.videoReferenceRemoteHint")}
+                  icon={<Images />}
+                />
+                <Select
+                  value={referenceVoiceId || "__none__"}
+                  onValueChange={selectReferenceVoice}
+                  disabled={hasFirstFrame}
+                >
                   <SelectTrigger className={cn("h-8 w-auto gap-1.5 border-0 bg-transparent px-2 shadow-none", hasReferenceAudio && "bg-secondary/70")} aria-label={t("creativeConsole.referenceVoice")}>
                     <AudioLines className="size-3.5" />
                     <SelectValue placeholder={t("creativeConsole.referenceVoiceShort")} />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-h-60">
                     <SelectItem value="__none__">{t("creativeConsole.referenceVoiceNone")}</SelectItem>
                     {(voices.length > 0 ? voices : [{ voiceId: "eve", name: "Eve" }, { voiceId: "ara", name: "Ara" }] as VoiceInfo[]).map((voice) => (
                       <SelectItem key={voice.voiceId} value={voice.voiceId}>{voice.name || voice.voiceId}</SelectItem>
@@ -1388,7 +1365,6 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
                       {videoUploadMutation.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
                       {t("creativeConsole.uploadVideo")}
                     </Button>
-                    {videoUploadMutation.isError ? <p className="mt-1 text-[11px] text-destructive">{videoUploadMutation.error.message}</p> : null}
                   </PopoverContent>
                 </Popover>
               )}
@@ -1408,7 +1384,6 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
             </Button>
           </div>
         </div>
-        {createMutation.isError ? <div className="mt-1 px-2 text-[11px] text-destructive">{createMutation.error.message}</div> : null}
       </form>
     </div>
   );
@@ -1486,7 +1461,7 @@ function VideoResult({
 }
 
 
-function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePanelProps) {
+function VoicePanel({ apiKey, model, modelOptions, onModelChange, active = true }: CreativePanelProps) {
   const { t } = useTranslation();
   const [subMode, setSubMode] = useState<"tts" | "stt">("tts");
   const [prompt, setPrompt] = useState("");
@@ -1511,13 +1486,14 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     : filteredModels[0]?.publicId ?? "";
 
   useEffect(() => {
+    if (!active) return;
     if (activeModel !== model) onModelChange(activeModel);
-  }, [activeModel, model, onModelChange]);
+  }, [active, activeModel, model, onModelChange]);
 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "voices", apiKey, activeModel],
     queryFn: ({ signal }) => listVoices({ apiKey, model: activeModel || "grok-voice-latest", signal }),
-    enabled: Boolean(apiKey) && subMode === "tts",
+    enabled: Boolean(active && apiKey && subMode === "tts"),
     staleTime: 60_000,
   });
   const voices = useMemo(() => voicesQuery.data ?? [], [voicesQuery.data]);
@@ -1531,6 +1507,9 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
       setTtsResult(result);
       setSttResult(null);
     },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t("errors.generic"), { duration: 6000 });
+    },
   });
   const sttMutation = useMutation({
     mutationFn: async () => {
@@ -1540,6 +1519,9 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     onSuccess: (result) => {
       setSttResult(result);
       setTtsResult(null);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t("errors.generic"), { duration: 6000 });
     },
   });
 
@@ -1583,8 +1565,6 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
             </div>
           </div>
         ) : null}
-        {ttsMutation.isError ? <div className="px-2 text-[11px] text-destructive">{ttsMutation.error.message}</div> : null}
-        {sttMutation.isError ? <div className="px-2 text-[11px] text-destructive">{sttMutation.error.message}</div> : null}
       </div>
       <form onSubmit={submit} className={composerClassName}>
         <div className="flex items-center gap-2 px-3 pt-3">
@@ -2005,9 +1985,9 @@ function createBlankChatSession(model: string): ChatSession {
     updatedAt: now,
     model,
     promptCacheKey: createCreativeCacheKey(),
-    reasoningEffort: "auto",
-    webSearch: false,
-    xSearch: false,
+    reasoningEffort: "xhigh",
+    webSearch: true,
+    xSearch: true,
     messages: [],
   };
 }
