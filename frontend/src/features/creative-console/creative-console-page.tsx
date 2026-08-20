@@ -136,7 +136,13 @@ export function CreativeConsolePage() {
   }, [availableModels, selectedKey]);
   const modelGroups = useMemo(() => ({
     chat: uniqueModelsByPublicID(permittedModels.filter((model) => model.capability === "chat" || model.capability === "responses")),
-    image: uniqueModelsByPublicID(permittedModels.filter((model) => model.capability === "image")),
+    // Web keeps generation (`image`) and Super-only `grok-imagine-image-edit`
+    // (`image_edit`) as separate public IDs. Console dual-capability routes
+    // share a public ID; prefer the generation route so text-to-image still works.
+    image: uniqueModelsByPublicID([
+      ...permittedModels.filter((model) => model.capability === "image"),
+      ...permittedModels.filter((model) => model.capability === "image_edit"),
+    ]),
     // Keep every route target for VideoPanel. It presents one row per public ID,
     // but edit/extend eligibility depends on whether any aggregated target is
     // Console/grok-imagine-video, not on the public name chosen by the operator.
@@ -289,6 +295,9 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
   const fixedReasoningModel = isFixedReasoningConsoleModel(selectedModelRoute);
   const effectiveReasoningEffort: ReasoningEffort = fixedReasoningModel ? "auto" : reasoningEffort;
   const reasoningEffortOptions: ReasoningEffort[] = fixedReasoningModel ? ["auto"] : ["auto", "none", "low", "medium", "high", "xhigh"];
+  // Grok Web accepts hosted web_search but rejects tools.type=x_search.
+  const supportsXSearch = modelSupportsXSearch(selectedModelRoute);
+  const effectiveXSearch = supportsXSearch && xSearch;
 
   useEffect(() => {
     if (restoredInitialModelRef.current || modelOptions.length === 0) return;
@@ -310,7 +319,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
         promptCacheKey,
         reasoningEffort: effectiveReasoningEffort,
         webSearch,
-        xSearch,
+        xSearch: effectiveXSearch,
         messages,
       };
       setSessions((current) => {
@@ -319,7 +328,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
       });
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [effectiveReasoningEffort, messages, model, promptCacheKey, sessionCreatedAt, sessionId, storageScope, webSearch, xSearch]);
+  }, [effectiveReasoningEffort, effectiveXSearch, messages, model, promptCacheKey, sessionCreatedAt, sessionId, storageScope, webSearch]);
 
   useEffect(() => () => {
     cancelActiveRequest();
@@ -445,7 +454,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
       promptCacheKey: params.cacheKey,
       reasoningEffort: effectiveReasoningEffort,
       webSearch,
-      xSearch,
+      xSearch: effectiveXSearch,
       assistantMessageId: params.assistantMessage.id,
       apiKey,
       model,
@@ -642,7 +651,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
         promptCacheKey,
         reasoningEffort: effectiveReasoningEffort,
         webSearch,
-        xSearch,
+        xSearch: effectiveXSearch,
         messages,
       }) : current;
       return persistChatSessions(storageScope, next);
@@ -674,7 +683,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
         promptCacheKey,
         reasoningEffort: effectiveReasoningEffort,
         webSearch,
-        xSearch,
+        xSearch: effectiveXSearch,
         messages,
       });
     }
@@ -693,7 +702,15 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
     clearEditState();
     setPendingTruncate(null);
     mutation.reset();
-    if (target.model && modelOptions.some((option) => option.publicId === target.model)) onModelChange(target.model);
+    if (target.model && modelOptions.some((option) => option.publicId === target.model)) {
+      handleChatModelChange(target.model);
+    }
+  }
+
+  function handleChatModelChange(nextModel: string): void {
+    onModelChange(nextModel);
+    const nextRoute = modelOptions.find((option) => option.publicId === nextModel);
+    if (!modelSupportsXSearch(nextRoute) && xSearch) setXSearch(false);
   }
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
@@ -791,7 +808,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
           <Textarea id="chat-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={handlePromptKeyDown} placeholder={t("creativeConsole.chatPlaceholder")} className="min-h-24 resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0" />
           <div className="flex items-center justify-between gap-3 px-3 pb-3">
             <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
-              <CompactModelSelect value={model} models={modelOptions} onChange={onModelChange} />
+              <CompactModelSelect value={model} models={modelOptions} onChange={handleChatModelChange} />
               <CompactIconSelect
                 value={webSearch ? "on" : "off"}
                 options={[{ value: "off", label: t("creativeConsole.webSearchOff") }, { value: "on", label: t("creativeConsole.webSearchOn") }]}
@@ -801,12 +818,13 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
                 active={webSearch}
               />
               <CompactIconSelect
-                value={xSearch ? "on" : "off"}
+                value={effectiveXSearch ? "on" : "off"}
                 options={[{ value: "off", label: t("creativeConsole.xSearchOff") }, { value: "on", label: t("creativeConsole.xSearchOn") }]}
                 onChange={(value) => setXSearch(value === "on")}
                 ariaLabel={t("creativeConsole.xSearch")}
                 icon={<XSocialIcon />}
-                active={xSearch}
+                active={effectiveXSearch}
+                disabled={!supportsXSearch}
               />
               <CompactIconSelect
                 value={effectiveReasoningEffort}
@@ -893,10 +911,9 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const supports2kResolution = selectedRoute?.provider === "grok_console";
   // Console image models also expose image_edit. Web free lite only generates;
   // Web editing is the separate Super-only grok-imagine-image-edit route.
-  const supportsImageEdit = selectedRoute?.provider === "grok_console"
-    || selectedRoute?.capability === "image_edit"
-    || modelID.includes("image-edit");
-  const isEditMode = supportsImageEdit && references.hasReferences;
+  const isImageEditOnly = isImageEditOnlyRoute(selectedRoute);
+  const supportsImageEdit = selectedRoute?.provider === "grok_console" || isImageEditOnly;
+  const isEditMode = isImageEditOnly || (supportsImageEdit && references.hasReferences);
   const resolutionOptions: readonly string[] = supports2kResolution ? imageResolutions : ["1k"];
   // Derive the effective resolution so unsupported 2k never needs a syncing effect.
   const selectedResolution = resolutionOptions.includes(resolution) ? resolution : "1k";
@@ -904,10 +921,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
 
   function handleImageModelChange(nextModel: string): void {
     const nextRoute = modelOptions.find((item) => item.publicId === nextModel);
-    const nextID = nextModel.toLowerCase();
-    const nextSupportsEdit = nextRoute?.provider === "grok_console"
-      || nextRoute?.capability === "image_edit"
-      || nextID.includes("image-edit");
+    const nextSupportsEdit = nextRoute?.provider === "grok_console" || isImageEditOnlyRoute(nextRoute);
     if (!nextSupportsEdit) references.clear();
     const nextSupports2k = nextRoute?.provider === "grok_console";
     if (!nextSupports2k && resolution !== "1k") setResolution("1k");
@@ -1038,7 +1052,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
               type="submit"
               size="icon"
               aria-label={isEditMode ? t("creativeConsole.editImage") : t("creativeConsole.generateImage")}
-              disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}
+              disabled={!apiKey || !model || !prompt.trim() || mutation.isPending || (isImageEditOnly && !references.hasReferences)}
             >
               {mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
             </Button>
@@ -1566,7 +1580,8 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange, active = true 
           </div>
         ) : null}
       </div>
-      <form onSubmit={submit} className={composerClassName}>
+      <form className="w-full shrink-0 px-3 pb-2 sm:px-6 sm:pb-3" onSubmit={submit}>
+        <div className={composerClassName}>
         <div className="flex items-center gap-2 px-3 pt-3">
           <Button type="button" size="sm" variant={subMode === "tts" ? "secondary" : "ghost"} className="h-8 gap-1.5" onClick={() => setSubMode("tts")}><AudioLines />{t("creativeConsole.synthesize")}</Button>
           <Button type="button" size="sm" variant={subMode === "stt" ? "secondary" : "ghost"} className="h-8 gap-1.5" onClick={() => setSubMode("stt")}><Mic />{t("creativeConsole.transcribe")}</Button>
@@ -1603,6 +1618,7 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange, active = true 
           <Button type="submit" size="icon" aria-label={subMode === "tts" ? t("creativeConsole.synthesize") : t("creativeConsole.transcribe")} disabled={!apiKey || !activeModel || busy || (subMode === "tts" ? !prompt.trim() : !audioFile)}>
             {busy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
           </Button>
+        </div>
         </div>
       </form>
     </div>
@@ -1958,6 +1974,17 @@ function uniqueModelsByPublicID(models: ModelRouteDTO[]): ModelRouteDTO[] {
 
 function isFixedReasoningConsoleModel(model: ModelRouteDTO | undefined): boolean {
   return model?.provider === "grok_console" && model.upstreamModel === "grok-4.20-0309-reasoning";
+}
+
+function isImageEditOnlyRoute(model: ModelRouteDTO | undefined): boolean {
+  if (!model) return false;
+  return model.capability === "image_edit" || model.publicId.toLowerCase().includes("image-edit");
+}
+
+function modelSupportsXSearch(model: ModelRouteDTO | undefined): boolean {
+  // Grok Web maps upstream-native search into x_search_call in responses, but
+  // client tools.type=x_search is only accepted by Build / Console.
+  return model?.provider === "grok_build" || model?.provider === "grok_console";
 }
 
 let fallbackMessageID = 0;
