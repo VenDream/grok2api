@@ -663,6 +663,42 @@ func TestNormalizeRequestDoesNotInjectToolsForConsoleCatalog(t *testing.T) {
 	}
 }
 
+func TestNormalizeRequestDoesNotInjectToolChoiceForHostedSearch(t *testing.T) {
+	// Creative console sends web_search/x_search without tool_choice. Injecting
+	// tool_choice=auto makes grok-4.5 Console return:
+	// "A tool_choice was set on the request but no tools were specified."
+	for _, model := range []string{"grok-4.5", "grok-4.3"} {
+		t.Run(model, func(t *testing.T) {
+			spec, ok := Resolve(model)
+			if !ok {
+				t.Fatalf("%s missing", model)
+			}
+			body, err := normalizeRequest([]byte(`{
+				"model":"`+model+`",
+				"input":[{"role":"user","content":"hello"}],
+				"stream":true,
+				"store":false,
+				"reasoning":{"summary":"auto"},
+				"tools":[{"type":"web_search"},{"type":"x_search"}]
+			}`), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatal(err)
+			}
+			tools, _ := payload["tools"].([]any)
+			if len(tools) != 2 {
+				t.Fatalf("tools = %#v", tools)
+			}
+			if payload["tool_choice"] != nil {
+				t.Fatalf("must not inject tool_choice when the client omitted it: %#v", payload["tool_choice"])
+			}
+		})
+	}
+}
+
 func TestNormalizeRequestPreservesMultiAgentDefaultsWithoutInjectingTools(t *testing.T) {
 	spec, ok := Resolve("grok-4.20-multi-agent-0309")
 	if !ok {

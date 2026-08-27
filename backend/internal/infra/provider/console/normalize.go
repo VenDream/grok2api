@@ -386,7 +386,9 @@ func normalizeConsoleToolChoice(payload map[string]any, retainedClientTools bool
 	}
 	choice, exists := payload["tool_choice"]
 	if !exists {
-		payload["tool_choice"] = "auto"
+		// auto is the upstream default when tools are present. Do not inject it:
+		// grok-4.5 Console treats hosted web_search/x_search as unspecified tools
+		// and rejects an explicit tool_choice with invalid-argument.
 		return
 	}
 	if value, ok := choice.(string); ok {
