@@ -53,15 +53,16 @@ __pycache__/
 .gitattributes
 
 # AI agents
-.agent
 .agents
-.trellis
-.grok
-.codex
 .claude
-.opencode
-grok.sh
+.codex
+.grok
+.pi
+.trellis
+.gitattributes
 codex.sh
 claude.sh
-opencode.sh
+grok.sh
+pi.sh
 AGENTS.md
+docs/
